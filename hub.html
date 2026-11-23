@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>StudyHub Mini · 学习空间</title>
+  <link rel="stylesheet" href="hub.css">
+  <script src="hub.js" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="frame header-inner">
+      <div class="brand"><span class="brand-mark" aria-hidden="true">S</span> StudyHub Mini</div>
+      <div class="theme-control">
+        <label for="theme">外观</label>
+        <select id="theme">
+          <option value="system">跟随系统</option>
+          <option value="light">浅色</option>
+          <option value="dark">深色</option>
+        </select>
+      </div>
+    </div>
+  </header>
+
+  <main class="frame">
+    <div class="intro">
+      <h1>学习空间</h1>
+      <time id="today"></time>
+    </div>
+
+    <section class="countdown" aria-labelledby="countdown-title">
+      <div class="countdown-content">
+        <h2 id="countdown-title">考研倒计时</h2>
+        <div class="countdown-value" aria-live="polite">
+          <div><span id="days">—</span> <span class="days-label">天</span></div>
+          <p id="exam-label">设置考试日期后开始倒计时</p>
+        </div>
+        <form id="exam-form" class="inline-form">
+          <label class="visually-hidden" for="exam-date">考试日期</label>
+          <input id="exam-date" type="date" required>
+          <button class="control" type="submit">保存日期</button>
+        </form>
+      </div>
+      <div class="dial" aria-hidden="true"></div>
+    </section>
+
+    <section class="section" aria-labelledby="modules-title">
+      <h2 id="modules-title">学习模块</h2>
+      <div class="module-grid">
+        <article class="card module">
+          <span class="module-icon essay-icon" aria-hidden="true">E</span>
+          <h3>EssayBook</h3>
+          <p>英语作文、表达收藏与随机默写</p>
+          <div class="module-actions"><a class="control primary" href="./">打开 EssayBook</a></div>
+        </article>
+        <article class="card module">
+          <span class="module-icon wrong-icon" aria-hidden="true">W</span>
+          <h3>WrongBook</h3>
+          <p>数学一与 408 错题复习</p>
+          <div class="module-actions">
+            <a id="wrongbook-link" class="control primary" referrerpolicy="no-referrer" hidden>打开 WrongBook</a>
+            <details id="wrongbook-settings">
+              <summary id="wrongbook-setting-label" class="control">设置网址</summary>
+              <form id="wrongbook-form" class="url-form">
+                <label for="wrongbook-url">当前设备可访问的 WrongBook 网址</label>
+                <div class="inline-form">
+                  <input id="wrongbook-url" type="url" placeholder="http://localhost:5173" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="wrongbook-error">
+                  <button class="control" type="submit">保存</button>
+                </div>
+                <p id="wrongbook-error" class="error" role="alert" hidden></p>
+              </form>
+            </details>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="goals-title">
+      <div class="section-heading">
+        <h2 id="goals-title">今日学习目标</h2>
+        <span id="goals-progress" aria-live="polite"></span>
+      </div>
+      <div class="card goals">
+        <p id="goals-empty">今天还没有添加目标。</p>
+        <ul id="goals-list" class="goals-list" aria-label="今日目标清单" hidden></ul>
+        <form id="goal-form" class="inline-form">
+          <label class="visually-hidden" for="goal">新学习目标</label>
+          <input id="goal" type="text" maxlength="120" placeholder="例如：默写 10 条英语表达" required>
+          <button class="control primary" type="submit">添加目标</button>
+        </form>
+      </div>
+    </section>
+    <p id="storage-status" role="status" hidden></p>
+  </main>
+</body>
+</html>
