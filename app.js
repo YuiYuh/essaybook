@@ -1,15 +1,70 @@
 /* EssayBook: public application shell. Private writing data is never bundled here. */
 const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const NAMES={home:'开始背诵',challenge:'随机默写',essays:'我的作文',phrases:'素材搜索',favorites:'我的收藏',settings:'设置'};
+const NAMES={home:'首页',challenge:'随机默写',essays:'我的作文',phrases:'替换表达',favorites:'我的收藏',settings:'设置'};
 const NAV=[['home','◧'],['essays','▤'],['phrases','⌕'],['favorites','☆']];
 const KEY='essaybook-local-v1',CONFIG='essaybook-cloud-config-v1';
+const RECOVERY_PREFIX = 'essaybook-recovery-';
 const blank=()=>({schemaVersion:1,essays:[],phrases:[],favorites:[],reviews:{},collections:[]});
 let data=loadData(), config=loadConfig(), db=null, user=null, synced=false, localDirty=false, lastCloudStamp='';
+let cloudError = '';
 let initialCloudPending = Boolean(config.url && config.key);
-let ui={page:'home',challenge:null,essay:null,variant:'final',readMode:'cn',shown:{},phraseQuery:'',phraseFilter:'all',essayFilter:'all',onlyFavorites:false,studyList:[],studyIndex:0,reveal:false,studyType:'sentence',typed:'',comparison:false};
+const PHRASE_PAGE_SIZE = 40;
+let ui={page:'home',challenge:null,essay:null,variant:'final',readMode:'cn',shown:{},phraseQuery:'',phraseFilter:'all',phraseLimit:PHRASE_PAGE_SIZE,essayFilter:'all',onlyFavorites:false,studyList:[],studyIndex:0,reveal:false,studyType:'sentence',typed:'',comparison:false};
 function loadData(){try{return {...blank(),...JSON.parse(localStorage.getItem(KEY))}}catch{return blank()}}
 function loadConfig(){let stored={};try{stored=JSON.parse(localStorage.getItem(CONFIG))||{}}catch{}const preset=window.ESSAYBOOK_CLOUD||{};const ready=preset.key && !preset.key.startsWith('REPLACE_WITH_');return ready?{url:preset.url,key:preset.key}:stored}
-function saveLocal(){localStorage.setItem(KEY,JSON.stringify(data))}
+function recoveryKeys() {
+  const keys = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key?.startsWith(RECOVERY_PREFIX)) keys.push(key);
+  }
+  return keys.sort().reverse();
+}
+
+function writeLocal(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch (error) {
+    if (error.name !== 'QuotaExceededError') throw error;
+    const keys = recoveryKeys();
+    const copies = new Set();
+    let removedDuplicate = false;
+    for (const recoveryKey of keys) {
+      const copy = localStorage.getItem(recoveryKey);
+      if (copy === null) continue;
+      if (copies.has(copy)) {
+        localStorage.removeItem(recoveryKey);
+        removedDuplicate = true;
+      } else {
+        copies.add(copy);
+      }
+    }
+    if (!removedDuplicate) throw error;
+    localStorage.setItem(key, value);
+  }
+}
+
+function saveLocal(snapshot = data) {
+  writeLocal(KEY, JSON.stringify(snapshot));
+}
+
+function saveRecoveryCopy(snapshot) {
+  const value = JSON.stringify(snapshot);
+  if (recoveryKeys().some(key => localStorage.getItem(key) === value)) return;
+  let timestamp = Date.now();
+  while (localStorage.getItem(RECOVERY_PREFIX + timestamp) !== null) timestamp++;
+  writeLocal(RECOVERY_PREFIX + timestamp, value);
+}
+
+// Supabase's JSONB output can reorder object keys without changing any data.
+function sameSnapshot(left, right) {
+  if (left === right) return true;
+  if (!left || !right || typeof left !== 'object' || typeof right !== 'object') return false;
+  if (Array.isArray(left) !== Array.isArray(right)) return false;
+  const keys = Object.keys(left);
+  return keys.length === Object.keys(right).length &&
+    keys.every(key => Object.hasOwn(right, key) && sameSnapshot(left[key], right[key]));
+}
 let saveTimer;
 function save() {
   localDirty = true;
@@ -22,27 +77,284 @@ function save() {
   }, 900);
 }
 function toast(s){const e=$('#toast');e.textContent=s;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),2700)}
+function cloudNotice() {
+  if (cloudError) return cloudError;
+  if (user) return synced ? '✓ 已连接云端，修改自动同步' : '正在连接或同步中';
+  return config.url && config.key ? '连接已预配置，不用填写 URL 和 Key。' : '尚未配置公开连接密钥。';
+}
+
+function refreshCloudStatus() {
+  $('#cloudBadge').innerHTML = `<span class="dot ${user && synced ? 'green' : ''}"></span><span>${user && synced ? '云端已连接' : user ? '云端未同步' : '本地模式'}</span>`;
+  const notice = $('#cloudSyncNotice');
+  if (notice) notice.textContent = cloudNotice();
+}
+
+function reportCloudError(label, error) {
+  synced = false;
+  const message = error.name === 'QuotaExceededError'
+    ? '浏览器的本机存储空间已满。请先导出完整备份。'
+    : error.message;
+  cloudError = `${label}：${message}`;
+  refreshCloudStatus();
+  toast(cloudError);
+}
 const countWords=s=>(String(s||'').match(/\b[\w'-]+\b/g)||[]).length;
 const paras=s=>String(s||'').split(/\n\s*\n/).map(x=>x.trim()).filter(Boolean);
 const uniq=a=>[...new Set(a)];
 function showPage(p){if(p!=='challenge')clearChallenge();ui.page=p;ui.comparison=false;draw();scrollTo(0,0)}
 function btn(label,action,cls=''){return `<button class="btn ${cls}" data-action="${esc(action)}">${label}</button>`}
 function empty(title,desc,action='导入我的学习资料'){return `<div class="empty"><div style="font-size:29px">◌</div><strong>${title}</strong><p>${desc}</p>${btn(action,'import','primary')}</div>`}
-function navBar(){let render=a=>a.map(([id,icon])=>`<button class="navItem ${ui.page===id?'active':''}" data-page="${id}"><span class="glyph">${icon}</span>${NAMES[id]}</button>`).join('');$('#nav').innerHTML=render(NAV.slice(0,2));$('#toolnav').innerHTML=render(NAV.slice(2));$('#breadcrumbs').textContent=`学习空间 / ${NAMES[ui.page]}`;$('#statPill').textContent=`${data.essays.length} 篇作文 · ${data.phrases.length} 条素材`;document.querySelectorAll('.mobileBottom').forEach(e=>e.remove());document.body.insertAdjacentHTML('beforeend',`<div class="mobileBottom">${NAV.map(([id,icon])=>`<button class="${ui.page===id?'active':''}" data-page="${id}"><span class="glyph">${icon}</span>${NAMES[id]}</button>`).join('')}</div>`);$('#cloudBadge').innerHTML=`<span class="dot ${user&&synced?'green':''}"></span><span>${user&&synced?'云端已连接':user?'云端未同步':'本地模式'}</span>`}
-function draw(){navBar();let html=({home:renderHome,challenge:renderChallenge,essays:renderEssays,phrases:renderPhrases,favorites:renderFavorites,settings:renderSettings})[ui.page]();$('#app').innerHTML=html;attach();}
+function navBar(){let render=a=>a.map(([id,icon])=>`<button class="navItem ${ui.page===id?'active':''}" data-page="${id}"><span class="glyph">${icon}</span>${NAMES[id]}</button>`).join('');$('#nav').innerHTML=render(NAV.slice(0,2));$('#toolnav').innerHTML=render(NAV.slice(2));$('#breadcrumbs').textContent=`学习空间 / ${NAMES[ui.page]}`;$('#statPill').textContent=`${data.essays.length} 篇作文 · ${data.phrases.length} 条素材`;document.querySelectorAll('.mobileBottom').forEach(e=>e.remove());document.body.insertAdjacentHTML('beforeend',`<div class="mobileBottom">${NAV.map(([id,icon])=>`<button class="${ui.page===id?'active':''}" data-page="${id}"><span class="glyph">${icon}</span>${NAMES[id]}</button>`).join('')}</div>`);refreshCloudStatus()}
+function draw() {
+  navBar();
+  if (ui.page !== 'phrases' || !$('#phraseSearch')) {
+    const render = {home:renderHome,challenge:renderChallenge,essays:renderEssays,phrases:renderPhrases,favorites:renderFavorites,settings:renderSettings};
+    $('#app').innerHTML = render[ui.page]();
+    if (ui.page === 'phrases') attachPhraseSearch();
+  }
+  if (ui.page === 'phrases') updatePhraseResults();
+  attach();
+}
 function layoutHeader(eyebrow,title,subtitle){return `<div class="eyebrow">${eyebrow}</div><h1 class="pageTitle">${title}</h1><p class="sub">${subtitle}</p>`}
 function essayRow(e){return `<button class="essayItem" data-essay="${esc(e.id)}"><div class="fileIcon">▤</div><div class="details"><b>${esc(e.year)} · ${esc(e.title)}</b><small>${esc(e.kind)}　/　${esc(e.topic)}</small></div><span class="arrow">→</span></button>`}
-function renderHome(){if(ui.studyType==='active')return renderStudy();if(ui.essay)return renderEssayDetail();const count=Object.values(data.reviews||{}).length;return `${layoutHeader('YOUR PERSONAL WRITING STUDIO','今天，背点真正用得上的。','选择一篇作文，或者从你的专属素材库挑选句子。只学自己需要的内容，不强制安排任务。')}<div class="heroStats" style="margin-bottom:22px"><div class="stat"><b>${data.essays.length}</b><span>篇作文</span></div><div class="stat"><b>${data.phrases.length}</b><span>条表达</span></div><div class="stat"><b>${count}</b><span>条复习记录</span></div></div><div class="grid2"><div class="panel"><div class="panelTitle"><h2>我的作文</h2><a data-page="essays">全部作文 →</a></div><div class="cardList">${data.essays.length?data.essays.slice().reverse().slice(0,5).map(essayRow).join(''):empty('你的作文库还没导入','导入私人学习数据后，8篇作文和AI修改稿都会出现在这里。')}</div></div><div class="rows"><div class="dailyBox"><div class="eyebrow">STUDY YOUR WAY</div><h3>从一句，练到一篇。</h3><p>整篇遮挡、中英对照、中文提示、好句默写。背哪些，你自己决定。</p><div class="actions">${btn('整篇背诵 →','chooseEssay','primary')}${btn('好句背诵','sentenceMode','soft')}${btn('随机默写','randomChallenge','soft')}</div></div><div class="panel"><div class="panelTitle"><h2>快速开始</h2></div><div class="rows">${[['▤','从作文里提取重点句','essays'],['⌕','搜索高级搭配','phrases'],['☆','复习收藏的表达','favorites']].map(([ic,l,p])=>`<button class="essayItem" data-page="${p}"><div class="fileIcon">${ic}</div><div class="details"><b>${l}</b></div><span class="arrow">→</span></button>`).join('')}</div></div></div></div><div class="notice">与官方ChatGPT讨论作文：${btn('打开 ChatGPT ↗','chatgpt','soft')}　讨论完成后可通过“设置 → 导入/导出”更新本站资料。自动双向同步尚未配置。</div>`}
+function renderHome(){if(ui.studyType==='active')return renderStudy();if(ui.essay)return renderEssayDetail();const count=Object.values(data.reviews||{}).length;return `${layoutHeader('YOUR PERSONAL WRITING STUDIO','我的英语作文工作台','写作文时按中文查英文替换表达，也可以打开自己的作文和好句。')}<div class="actions home-expression-link">${btn('按中文查替换表达 →','toPhrases','primary')}</div><div class="heroStats" style="margin-bottom:22px"><div class="stat"><b>${data.essays.length}</b><span>篇作文</span></div><div class="stat"><b>${data.phrases.length}</b><span>条表达</span></div><div class="stat"><b>${count}</b><span>条复习记录</span></div></div><div class="grid2"><div class="panel"><div class="panelTitle"><h2>我的作文</h2><a data-page="essays">全部作文 →</a></div><div class="cardList">${data.essays.length?data.essays.slice().reverse().slice(0,5).map(essayRow).join(''):empty('你的作文库还没导入','导入私人学习数据后，8篇作文和AI修改稿都会出现在这里。')}</div></div><div class="rows"><div class="dailyBox"><div class="eyebrow">STUDY YOUR WAY</div><h3>从一句，练到一篇。</h3><p>整篇遮挡、中英对照、中文提示、好句默写。背哪些，你自己决定。</p><div class="actions">${btn('整篇背诵 →','chooseEssay','primary')}${btn('好句背诵','sentenceMode','soft')}${btn('随机默写','randomChallenge','soft')}</div></div><div class="panel"><div class="panelTitle"><h2>快速开始</h2></div><div class="rows">${[['▤','从作文里提取重点句','essays'],['☆','查看收藏的表达','favorites']].map(([ic,l,p])=>`<button class="essayItem" data-page="${p}"><div class="fileIcon">${ic}</div><div class="details"><b>${l}</b></div><span class="arrow">→</span></button>`).join('')}</div></div></div></div><div class="notice">与官方ChatGPT讨论作文：${btn('打开 ChatGPT ↗','chatgpt','soft')}　讨论完成后可通过“设置 → 导入/导出”更新本站资料。自动双向同步尚未配置。</div>`}
 function renderEssays(){if(ui.essay)return renderEssayDetail();const list=data.essays.filter(e=>ui.essayFilter==='all'||e.kind===ui.essayFilter);return `${layoutHeader('YOUR WRITING ARCHIVE','我的作文档案','保留原始手写稿、AI历史修改稿和推荐背诵版。版本不会互相覆盖。')}<div class="toolbar"><div class="seg">${[['all','全部'],['大作文','大作文'],['小作文','小作文']].map(([k,v])=>`<button class="${ui.essayFilter===k?'on':''}" data-essayfilter="${k}">${v}</button>`).join('')}</div>${btn('导入作文数据','import')}${btn('新增作文','addEssay','soft')}</div>${list.length?`<div class="essayGrid">${list.map(e=>`<button class="essayCard" data-essay="${esc(e.id)}"><div><span class="tag">${esc(e.kind)}</span><span class="tag grey">${esc(e.topic)}</span><h3>${esc(e.year)} · ${esc(e.title)}</h3></div><div class="foot"><span>${countWords(e.original)} 词原稿</span><span>查看并背诵 →</span></div></button>`).join('')}</div>`:empty('暂无作文','请先导入作文数据，或者新建一篇。')}`}
 function renderEssayDetail(){const e=data.essays.find(x=>x.id===ui.essay);if(!e){ui.essay=null;return renderEssays()}const source=e[ui.variant]||'';const arr=paras(source);const labels={original:'手写原稿',revised:'AI修改稿',final:'背诵版'};let comparison=ui.comparison?`<div class="compare"><div class="readingBox"><div class="eyebrow">ORIGINAL / 原稿</div><div class="article">${esc(e.original)}</div></div><div class="readingBox"><div class="eyebrow">REVISED / 修改稿</div><div class="article">${esc(e.revised)}</div></div></div>`:'';let article=arr.map((p,i)=>`<div class="readingBlock"><div class="paraHeader"><span class="paraLabel">PARAGRAPH ${String(i+1).padStart(2,'0')}</span>${btn(ui.shown[i]?'隐藏':'显示','togglePara:'+i,'ghost')}</div>${ui.readMode==='cn'?`<div class="cnHint">第 ${i+1} 段 · 根据这一段的观点自行回忆英文，点击下面区域查看原文。</div>`:''}${ui.readMode==='en'||ui.shown[i]?`<p class="article paragraph">${esc(p)}</p>`:`<div class="hiddenText" data-action="togglePara:${i}">英文已隐藏 · 点击展开核对</div>`}</div>`).join('');return `<button class="btn ghost" data-action="backEssays">← 返回作文库</button><div class="eyebrow" style="margin-top:20px">${esc(e.year)} / ${esc(e.kind)}</div><h1 class="pageTitle">${esc(e.title)}</h1><p class="sub">${esc(e.note||'')} · ${countWords(source)} 词</p><div class="toolbar"><div class="seg">${[['original','原稿'],['revised','AI修改'],['final','背诵版']].map(([k,v])=>`<button class="${ui.variant===k?'on':''}" data-variant="${k}">${v}</button>`).join('')}</div>${btn(ui.comparison?'退出对照':'左右对照','compare')}${btn('编辑当前版本','editEssay')}${btn('添加到句子库','extractSentences','soft')}</div>${ui.comparison?comparison:`<div class="toolbar"><div class="seg">${[['en','全文显示'],['cn','隐藏英文']].map(([k,v])=>`<button class="${ui.readMode===k?'on':''}" data-readmode="${k}">${v}</button>`).join('')}</div>${btn('全部显示','showAll')}${btn('全部隐藏','hideAll')}</div><div class="readingBox">${article}</div>`}`}
-function getFilteredPhrases(){let list=data.phrases||[];if(ui.onlyFavorites)list=list.filter(p=>data.favorites.includes(p.id));if(ui.phraseFilter!=='all')list=list.filter(p=>p.category===ui.phraseFilter||p.topic===ui.phraseFilter);let q=ui.phraseQuery.toLowerCase().trim();if(q)list=list.filter(p=>([p.en,p.zh,p.example,p.origin,p.topic,p.base].join(' ')).toLowerCase().includes(q));return list}
-function renderPhrases(){let list=getFilteredPhrases();return `${layoutHeader('YOUR EXPRESSION LIBRARY','好词好句搜索','既能搜索你上传的高级表达PDF，也能查找你自己作文中的高分句型。')}<div class="toolbar"><input id="phraseSearch" class="search" value="${esc(ui.phraseQuery)}" placeholder="搜索：中文、英文、搭配、作文来源…"/><select id="phraseFilter" class="select">${[['all','全部素材'],['高分句','高分句'],['高级词组','高级词组'],['高级词汇','高级词汇'],['科技','科技'],['图表描述','图表描述'],['小作文','小作文']].map(([v,t])=>`<option value="${v}" ${ui.phraseFilter===v?'selected':''}>${t}</option>`).join('')}</select>${btn('自选背诵这些','studyFiltered','primary')}${btn('随机默写','randomChallenge','soft')}</div><div class="toolbar"><span class="counter">找到 ${list.length} 条</span><div style="flex:1"></div>${btn('只看收藏','filterFav',ui.onlyFavorites?'soft':'')}</div><div class="phraseList">${list.slice(0,100).map(phraseHTML).join('')}</div>${list.length>100?`<p class="sub">为保持流畅，暂显示前100条。继续输入关键词可缩小范围。</p>`:''}${!list.length?empty('没有符合条件的表达','试试其他关键词或清除筛选。','导入素材'):''}`}
-function phraseHTML(p){let fav=data.favorites.includes(p.id);return `<div class="phrase"><div><b>${esc(p.en)}</b><p>${esc(p.zh)}</p>${p.example?`<p class="secondary">例：${esc(p.example)}</p>`:''}<small>${esc(p.origin)} · ${esc(p.status)}</small></div><div class="actions"><button class="fav ${fav?'on':''}" data-fav="${esc(p.id)}" title="收藏">${fav?'★':'☆'}</button><button class="btn" data-studyone="${esc(p.id)}">背诵</button></div></div>`}
-function renderFavorites(){let list=(data.phrases||[]).filter(p=>data.favorites.includes(p.id));return `${layoutHeader('YOUR PERSONAL COLLECTION','我的收藏','所有收藏在这里集中复习；是否背诵，由你决定。')}<div class="toolbar">${btn('背诵收藏的好句','studyFavorites','primary')}${btn('查找更多表达','toPhrases')}</div>${list.length?`<div class="phraseList">${list.map(phraseHTML).join('')}</div>`:empty('还没有收藏','在素材库里点击星标即可收藏。')}`}
-function renderStudy(){let list=ui.studyList.map(id=>data.phrases.find(p=>p.id===id)).filter(Boolean);if(!list.length){ui.studyType='sentence';return empty('没有可背诵的句子','请先从素材库选择或收藏句子。','打开素材库')}let i=Math.min(ui.studyIndex,list.length-1),p=list[i],rev=data.reviews[p.id]||{};return `<button class="btn ghost" data-action="endStudy">← 退出背诵</button><div class="eyebrow" style="margin-top:19px">SENTENCE RECALL</div><h1 class="pageTitle">好句背诵</h1><p class="sub">根据中文回忆英文，必要时打字默写；不会的句子可以标记为“需要重背”。</p><div class="panel" style="max-width:800px;margin:auto"><div class="panelTitle"><span class="secondary">${esc(p.origin)}</span><span class="counter">${i+1} / ${list.length}</span></div><div class="studyCard"><div class="muted">中译英</div><div class="question">${esc(p.zh)}</div>${ui.reveal?`<div class="answer">${esc(p.en)}</div>`:btn('查看英文答案','reveal','soft')}</div><div class="field"><label>试着默写（可选）</label><textarea id="typing" placeholder="在这里输入你记得的英文句子……">${esc(ui.typed)}</textarea></div>${ui.reveal?`<div class="actions" style="justify-content:center">${btn('需要重背','mark:again')}${btn('基本掌握','mark:known','primary')}</div>`:''}<div class="actions" style="justify-content:space-between;margin-top:15px">${btn('← 上一句','prev')}${btn('下一句 →','next')}</div><p class="secondary" style="text-align:center">${rev.last?'这句话已有复习记录：'+(rev.last==='known'?'基本掌握':'需要重背'):''}</p></div>`}
-function renderSettings(){const ready=!!(config.url&&config.key);return `${layoutHeader('ACCOUNT & STORAGE','账号与同步','只需要邮箱登录；网站自动连接云端，背诵记录自动保存。')}<div class="settingsGrid"><div class="panel"><div class="panelTitle"><h2>邮箱登录与自动同步</h2></div><p class="sub">${user?'已登录：'+esc(user.email||'当前账号'):'使用同一邮箱登录 iPad、iPhone 和 Mac，作文和背诵进度自动同步。'}</p><div class="notice">${user?(synced?'✓ 已连接云端；修改自动同步':'正在连接或同步中'):(ready?'连接已预配置，不用填写URL和Key。':'网站还需要一次性配置公开 Publishable Key。当前设备已保存的连接信息仍可继续使用。')}</div>${!user?`<div class="field"><label>邮箱（接收登录链接）</label><input id="supEmail" type="email" placeholder="your@email.com" autocomplete="email"/></div><div class="actions">${btn('发送邮箱登录链接','sendMagic','primary')}${btn('重新连接','connectCloud')}</div>`:`<div class="actions">${btn('立即同步','uploadCloud','primary')}${btn('从云端重新载入','downloadCloud')}${btn('退出登录','signOut')}</div>`}<p class="secondary">修改作文或标记背诵结果后会自动上传。不要同时在多台设备离线编辑同一份内容。</p></div><div class="panel"><div class="panelTitle"><h2>个人资料与备份</h2></div><p class="sub">即使云端正常，建议偶尔导出备份。</p><div class="actions">${btn('导入私人学习资料','import','soft')}${btn('导出完整备份','export')}</div><div class="notice warn">请勿把私人作文或 JSON 备份上传到公开 GitHub 仓库。</div></div></div>`}
+function normalizeSearch(value) {
+  return String(value ?? '').normalize('NFKC').toLowerCase().replace(/[‘’]/g, "'").replace(/\s+/g, ' ').trim();
+}
 
-function attach(){document.querySelectorAll('[data-page]').forEach(e=>e.onclick=()=>{ui.essay=null;ui.studyType='sentence';showPage(e.dataset.page)});document.querySelectorAll('[data-action]').forEach(e=>e.onclick=()=>act(e.dataset.action));document.querySelectorAll('[data-essay]').forEach(e=>e.onclick=()=>{ui.essay=e.dataset.essay;ui.variant='final';ui.shown={};ui.readMode='en';showPage('essays')});document.querySelectorAll('[data-variant]').forEach(e=>e.onclick=()=>{ui.variant=e.dataset.variant;ui.shown={};draw()});document.querySelectorAll('[data-readmode]').forEach(e=>e.onclick=()=>{ui.readMode=e.dataset.readmode;draw()});document.querySelectorAll('[data-essayfilter]').forEach(e=>e.onclick=()=>{ui.essayFilter=e.dataset.essayfilter;draw()});document.querySelectorAll('[data-fav]').forEach(e=>e.onclick=()=>{let id=e.dataset.fav;data.favorites=data.favorites.includes(id)?data.favorites.filter(x=>x!==id):[...data.favorites,id];save();draw()});document.querySelectorAll('[data-studyone]').forEach(e=>e.onclick=()=>startStudy([e.dataset.studyone]));let search=$('#phraseSearch');if(search){search.oninput=e=>{ui.phraseQuery=e.target.value;draw();let el=$('#phraseSearch');el.focus();el.setSelectionRange(el.value.length,el.value.length)}}let sel=$('#phraseFilter');if(sel)sel.onchange=e=>{ui.phraseFilter=e.target.value;draw()};let typing=$('#typing');if(typing)typing.oninput=e=>ui.typed=e.target.value;const challengeTyping=$('#challenge-typing');if(challengeTyping)challengeTyping.oninput=e=>ui.challenge.typed=e.target.value}
+const writingConcepts = (typeof WRITING_EXPRESSIONS === 'undefined' ? [] : WRITING_EXPRESSIONS).map(({ meaning, aliases, groups }) => ({
+  terms: [meaning, ...aliases].map(normalizeSearch),
+  groups: groups.map(({ id, label, keywords, entries }) => ({
+    label,
+    terms: [label, ...keywords].map(normalizeSearch),
+    phrases: entries.map(([en, zh, example]) => ({ id: `builtin:${id}:${en}`, en, zh, example })),
+  })),
+}));
+const builtinPhrases = writingConcepts.flatMap(concept => concept.groups.flatMap(group => group.phrases));
+
+function isSentenceMaterial(phrase) {
+  return phrase?.id && typeof phrase.en === 'string' && phrase.en.trim() && /句/.test(phrase.category || '');
+}
+
+function getPhraseResults() {
+  const query = normalizeSearch(ui.phraseQuery);
+  const favoriteIds = new Set(data.favorites);
+  const favoriteMatches = phrase => !ui.onlyFavorites || favoriteIds.has(phrase.id);
+  const equivalentTerms = new Set();
+  const groups = [];
+
+  const { phraseFilter } = ui;
+  const includeBuiltins = ['all', 'expressions'].includes(phraseFilter);
+  if (query || (includeBuiltins && ui.onlyFavorites)) {
+    for (const concept of writingConcepts) {
+      const exactConcept = concept.terms.includes(query);
+      const conceptMatches = query && concept.terms.some(term => term.includes(query));
+      if (exactConcept) concept.terms.forEach(term => equivalentTerms.add(term));
+
+      for (const group of concept.groups) {
+        if (exactConcept || group.terms.includes(query)) {
+          group.terms.forEach(term => equivalentTerms.add(term));
+          group.phrases.forEach(p => equivalentTerms.add(normalizeSearch(p.en)));
+        }
+        if (!includeBuiltins) continue;
+        const groupMatches = conceptMatches || (query && group.terms.some(term => term.includes(query)));
+        const phrases = group.phrases.filter(p => favoriteMatches(p) &&
+          (!query || groupMatches || [p.en, p.zh].some(text => normalizeSearch(text).includes(query))));
+        if (phrases.length) groups.push({ label: group.label, phrases });
+      }
+    }
+  }
+
+  const chineseEquivalents = [...equivalentTerms].filter(term => /\p{Script=Han}/u.test(term));
+  const imported = [];
+  for (const phrase of data.phrases) {
+    if (!phrase?.en || !favoriteMatches(phrase)) continue;
+    if (phraseFilter === 'sentences' && !isSentenceMaterial(phrase)) continue;
+    if (phraseFilter === 'expressions' && isSentenceMaterial(phrase)) continue;
+    if (!['all', 'sentences', 'expressions'].includes(phraseFilter) &&
+        phraseFilter !== phrase.category && phraseFilter !== phrase.topic) continue;
+    if (!query) {
+      imported.push({ phrase, rank: 0 });
+      continue;
+    }
+    const meanings = [phrase.en, phrase.zh, phrase.base].map(normalizeSearch);
+    if (meanings.includes(query)) imported.push({ phrase, rank: 0 });
+    else if (meanings.some(text => text.includes(query))) imported.push({ phrase, rank: 1 });
+    else if (meanings.some(text => equivalentTerms.has(text) || chineseEquivalents.some(term => text.includes(term)))) {
+      imported.push({ phrase, rank: 2 });
+    }
+    else if ([phrase.example, phrase.origin, phrase.topic, phrase.category].some(text => normalizeSearch(text).includes(query))) {
+      imported.push({ phrase, rank: 3 });
+    }
+  }
+  imported.sort((a, b) => a.rank - b.rank);
+  return { groups, imported: imported.map(({ phrase }) => phrase) };
+}
+
+function renderPhrases() {
+  return `
+    <h1 class="pageTitle">替换表达</h1>
+    <p class="sub">输入想表达的中文，也可以搜想替换的英文。</p>
+    <div class="toolbar expression-search" role="search" aria-label="查找写作表达">
+      <input id="phraseSearch" class="search" type="search" aria-label="中文意思或英文表达"
+        value="${esc(ui.phraseQuery)}" placeholder="例如：提高、提高效率、important" autocomplete="off" enterkeyhint="search">
+      <select id="phraseFilter" class="select" aria-label="素材类型或主题">
+        ${[['all','全部素材'],['expressions','单词短语'],['sentences','作文句子']].map(([value,label]) =>
+          `<option value="${value}" ${ui.phraseFilter === value ? 'selected' : ''}>${label}</option>`).join('')}
+        <optgroup label="我的素材">
+          ${['高分句', '高级词组', '高级词汇', '科技', '图表描述', '小作文'].map(label =>
+            `<option value="${label}" ${ui.phraseFilter === label ? 'selected' : ''}>${label}</option>`).join('')}
+        </optgroup>
+      </select>
+      <button type="button" id="phraseFavorites" class="btn" aria-pressed="${ui.onlyFavorites}">只看收藏</button>
+    </div>
+    <div class="actions expression-suggestions" aria-label="常用查询">
+      ${['提高', '减少', '促进', '重要', '导致', '解决', '占比'].map(query =>
+        `<button type="button" class="btn soft" data-phrase-query="${query}">${query}</button>`).join('')}
+    </div>
+    <p class="counter expression-count" id="phraseCount" role="status"></p>
+    <div id="phraseResults"></div>`;
+}
+
+function updatePhraseResults() {
+  const { groups, imported } = getPhraseResults();
+  const total = groups.reduce((count, group) => count + group.phrases.length, imported.length);
+  const count = $('#phraseCount');
+  const summary = `找到 ${total} 条表达`;
+  if (count.textContent !== summary) count.textContent = summary;
+
+  if (!total) {
+    const message = ui.phraseQuery.trim() || ui.onlyFavorites
+      ? '试试更短的关键词，或调整素材筛选。'
+      : '可以从「提高」等常用查询开始，也可以导入自己的素材。';
+    $('#phraseResults').innerHTML = `<div class="empty"><strong>暂无匹配的表达</strong><p>${message}</p>
+      <button type="button" class="btn" data-phrase-import>导入素材</button></div>`;
+    return;
+  }
+
+  $('#phraseResults').innerHTML = `
+    ${groups.map(({ label, phrases }) => `<section class="expression-group">
+      <h2 class="sectionTitle">${esc(label)}</h2><div class="phraseList">${phrases.map(phraseHTML).join('')}</div>
+    </section>`).join('')}
+    ${imported.length ? `<section class="expression-group">
+      <h2 class="sectionTitle">我的素材</h2>
+      <div class="phraseList">${imported.slice(0, ui.phraseLimit).map(phraseHTML).join('')}</div>
+      ${imported.length > ui.phraseLimit ? '<button type="button" class="btn expression-more" data-phrase-more>显示更多素材</button>' : ''}
+    </section>` : ''}`;
+}
+
+function attachPhraseSearch() {
+  const input = $('#phraseSearch');
+  let composing = false;
+  function applyQuery() {
+    if (ui.phraseQuery === input.value) return;
+    ui.phraseQuery = input.value;
+    ui.phraseLimit = PHRASE_PAGE_SIZE;
+    updatePhraseResults();
+  }
+
+  // Replacing the input during composition dismisses the IME candidate list.
+  input.addEventListener('compositionstart', () => { composing = true; });
+  input.addEventListener('compositionend', () => {
+    composing = false;
+    applyQuery();
+  });
+  input.addEventListener('input', event => {
+    if (!composing && !event.isComposing) applyQuery();
+  });
+  $('#phraseFilter').onchange = event => {
+    ui.phraseFilter = event.target.value;
+    ui.phraseLimit = PHRASE_PAGE_SIZE;
+    updatePhraseResults();
+  };
+  $('#phraseFavorites').onclick = event => {
+    ui.onlyFavorites = !ui.onlyFavorites;
+    event.currentTarget.setAttribute('aria-pressed', ui.onlyFavorites);
+    ui.phraseLimit = PHRASE_PAGE_SIZE;
+    updatePhraseResults();
+  };
+  document.querySelectorAll('[data-phrase-query]').forEach(button => {
+    button.onclick = () => {
+      input.value = button.dataset.phraseQuery;
+      applyQuery();
+    };
+  });
+}
+
+function phraseHTML(phrase) {
+  const isFavorite = data.favorites.includes(phrase.id);
+  return `<article class="phrase">
+    <div class="phrase-content">
+      <b lang="en">${esc(phrase.en)}</b>
+      ${phrase.zh ? `<p>${esc(phrase.zh)}</p>` : ''}
+      ${phrase.example ? `<p class="phrase-example" lang="en">${esc(phrase.example)}</p>` : ''}
+      ${phrase.origin ? `<small>${esc(phrase.origin)}</small>` : ''}
+    </div>
+    <div class="actions phrase-actions">
+      <button type="button" class="btn" data-copy-phrase>复制</button>
+      ${phrase.id ? `<button type="button" class="fav ${isFavorite ? 'on' : ''}" data-fav="${esc(phrase.id)}"
+        aria-label="收藏" aria-pressed="${isFavorite}" title="收藏">${isFavorite ? '★' : '☆'}</button>` : ''}
+    </div>
+  </article>`;
+}
+
+async function copyPhrase(english) {
+  try {
+    await navigator.clipboard.writeText(english.textContent);
+    toast('已复制英文表达');
+  } catch {
+    const range = document.createRange();
+    range.selectNodeContents(english);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    toast('已选中英文表达，请手动复制');
+  }
+}
+
+$('#app').addEventListener('click', event => {
+  const button = event.target.closest('button');
+  if (!button) return;
+  if (button.hasAttribute('data-copy-phrase')) {
+    copyPhrase(button.closest('.phrase').querySelector('b'));
+  } else if (button.hasAttribute('data-fav')) {
+    const id = button.dataset.fav;
+    const isFavorite = data.favorites.includes(id);
+    data.favorites = isFavorite ? data.favorites.filter(value => value !== id) : [...data.favorites, id];
+    save();
+    if (ui.page === 'favorites' || ui.onlyFavorites) draw();
+    else {
+      button.classList.toggle('on', !isFavorite);
+      button.setAttribute('aria-pressed', !isFavorite);
+      button.textContent = isFavorite ? '☆' : '★';
+    }
+  } else if (button.hasAttribute('data-phrase-more')) {
+    const firstNewPhrase = ui.phraseLimit;
+    ui.phraseLimit += PHRASE_PAGE_SIZE;
+    updatePhraseResults();
+    $('#phraseResults .expression-group:last-child').querySelectorAll('[data-copy-phrase]')[firstNewPhrase]?.focus();
+  } else if (button.hasAttribute('data-phrase-import')) {
+    $('#importFile').click();
+  }
+});
+
+function renderFavorites() {
+  const list = [...data.phrases, ...builtinPhrases].filter(p => data.favorites.includes(p?.id));
+  return `
+    <h1 class="pageTitle">我的收藏</h1>
+    <div class="toolbar">
+      ${btn('查找更多表达', 'toPhrases', 'primary')}
+      ${list.some(isSentenceMaterial) ? btn('背诵收藏的好句', 'studyFavorites') : ''}
+    </div>
+    ${list.length ? `<div class="phraseList">${list.map(phraseHTML).join('')}</div>`
+      : '<div class="empty"><strong>还没有收藏</strong><p>在表达旁点击星标即可收藏。</p></div>'}`;
+}
+function renderStudy(){let list=ui.studyList.map(id=>data.phrases.find(p=>p.id===id)).filter(Boolean);if(!list.length){ui.studyType='sentence';return empty('没有可背诵的句子','请先从素材库选择或收藏句子。','打开素材库')}let i=Math.min(ui.studyIndex,list.length-1),p=list[i],rev=data.reviews[p.id]||{};return `<button class="btn ghost" data-action="endStudy">← 退出背诵</button><div class="eyebrow" style="margin-top:19px">SENTENCE RECALL</div><h1 class="pageTitle">好句背诵</h1><p class="sub">根据中文回忆英文，必要时打字默写；不会的句子可以标记为“需要重背”。</p><div class="panel" style="max-width:800px;margin:auto"><div class="panelTitle"><span class="secondary">${esc(p.origin)}</span><span class="counter">${i+1} / ${list.length}</span></div><div class="studyCard"><div class="muted">中译英</div><div class="question">${esc(p.zh)}</div>${ui.reveal?`<div class="answer">${esc(p.en)}</div>`:btn('查看英文答案','reveal','soft')}</div><div class="field"><label>试着默写（可选）</label><textarea id="typing" placeholder="在这里输入你记得的英文句子……">${esc(ui.typed)}</textarea></div>${ui.reveal?`<div class="actions" style="justify-content:center">${btn('需要重背','mark:again')}${btn('基本掌握','mark:known','primary')}</div>`:''}<div class="actions" style="justify-content:space-between;margin-top:15px">${btn('← 上一句','prev')}${btn('下一句 →','next')}</div><p class="secondary" style="text-align:center">${rev.last?'这句话已有复习记录：'+(rev.last==='known'?'基本掌握':'需要重背'):''}</p></div>`}
+function renderSettings(){return `${layoutHeader('ACCOUNT & STORAGE','账号与同步','只需要邮箱登录；网站自动连接云端，背诵记录自动保存。')}<div class="settingsGrid"><div class="panel"><div class="panelTitle"><h2>邮箱登录与自动同步</h2></div><p class="sub">${user?'已登录：'+esc(user.email||'当前账号'):'使用同一邮箱登录 iPad、iPhone 和 Mac，作文和背诵进度自动同步。'}</p><div class="notice" id="cloudSyncNotice" role="status">${esc(cloudNotice())}</div>${!user?`<div class="field"><label>邮箱（接收登录链接）</label><input id="supEmail" type="email" placeholder="your@email.com" autocomplete="email"/></div><div class="actions">${btn('发送邮箱登录链接','sendMagic','primary')}${btn('重新连接','connectCloud')}</div>`:`<div class="actions">${btn('立即同步','uploadCloud','primary')}${btn('从云端重新载入','downloadCloud')}${btn('退出登录','signOut')}</div>`}<p class="secondary">修改作文或标记背诵结果后会自动上传。不要同时在多台设备离线编辑同一份内容。</p></div><div class="panel"><div class="panelTitle"><h2>个人资料与备份</h2></div><p class="sub">即使云端正常，建议偶尔导出备份。</p><div class="actions">${btn('导入私人学习资料','import','soft')}${btn('导出完整备份','export')}</div><div class="notice warn">请勿把私人作文或 JSON 备份上传到公开 GitHub 仓库。</div></div></div>`}
+
+function attach(){document.querySelectorAll('[data-page]').forEach(e=>e.onclick=()=>{ui.essay=null;ui.studyType='sentence';showPage(e.dataset.page)});document.querySelectorAll('[data-action]').forEach(e=>e.onclick=()=>act(e.dataset.action));document.querySelectorAll('[data-essay]').forEach(e=>e.onclick=()=>{ui.essay=e.dataset.essay;ui.variant='final';ui.shown={};ui.readMode='en';showPage('essays')});document.querySelectorAll('[data-variant]').forEach(e=>e.onclick=()=>{ui.variant=e.dataset.variant;ui.shown={};draw()});document.querySelectorAll('[data-readmode]').forEach(e=>e.onclick=()=>{ui.readMode=e.dataset.readmode;draw()});document.querySelectorAll('[data-essayfilter]').forEach(e=>e.onclick=()=>{ui.essayFilter=e.dataset.essayfilter;draw()});let typing=$('#typing');if(typing)typing.oninput=e=>ui.typed=e.target.value;const challengeTyping=$('#challenge-typing');if(challengeTyping)challengeTyping.oninput=e=>ui.challenge.typed=e.target.value}
 function startStudy(ids){if(!ids.length){toast('请先选择至少一句');return}ui.studyList=ids;ui.studyIndex=0;ui.reveal=false;ui.typed='';ui.studyType='active';ui.page='home';draw()}
 function act(action){if(action.startsWith('togglePara:')){let i=+action.split(':')[1];ui.shown[i]=!ui.shown[i];draw();return}if(action.startsWith('mark:')){let p=data.phrases.find(x=>x.id===ui.studyList[ui.studyIndex]);if(!p)return;const last=action.split(':')[1];recordReview(p.id,last);toast(last==='known'?'已标记掌握':'已加入重背');act('next');return}switch(action){
  case 'randomChallenge': startChallenge(); break;
@@ -51,7 +363,9 @@ function act(action){if(action.startsWith('togglePara:')){let i=+action.split(':
  case 'gradeChallenge:known': gradeChallenge('known'); break;
  case 'gradeChallenge:again': gradeChallenge('again'); break;
  case 'retryChallenge': retryChallenge(); break;
- case 'import':$('#importFile').click();break;case 'export':downloadJSON(data,'essaybook-backup-'+new Date().toISOString().slice(0,10)+'.json');break;case 'chooseEssay':ui.essay=null;showPage('essays');break;case 'sentenceMode':showPage('phrases');break;case 'chatgpt':window.open('https://chatgpt.com','_blank','noopener');break;case 'backEssays':ui.essay=null;showPage('essays');break;case 'toPhrases':showPage('phrases');break;case 'compare':ui.comparison=!ui.comparison;draw();break;case 'showAll':paras(data.essays.find(x=>x.id===ui.essay)?.[ui.variant]).forEach((_,i)=>ui.shown[i]=true);draw();break;case 'hideAll':ui.shown={};ui.readMode='cn';draw();break;case 'filterFav':ui.onlyFavorites=!ui.onlyFavorites;draw();break;case 'studyFiltered':startStudy(getFilteredPhrases().filter(p=>p.status==='推荐背诵'||p.category==='高分句').map(x=>x.id).slice(0,80));break;case 'studyFavorites':startStudy(data.favorites);break;case 'reveal':ui.reveal=true;draw();break;case 'prev':ui.studyIndex=(ui.studyIndex-1+ui.studyList.length)%ui.studyList.length;ui.reveal=false;ui.typed='';draw();break;case 'next':ui.studyIndex=(ui.studyIndex+1)%ui.studyList.length;ui.reveal=false;ui.typed='';draw();break;case 'endStudy':ui.studyType='sentence';showPage('phrases');break;case 'addEssay':editEssay(null);break;case 'editEssay':editEssay(data.essays.find(e=>e.id===ui.essay));break;case 'extractSentences':extractSentences();break;case 'connectCloud':initCloud();break;case 'sendMagic':sendMagic();break;case 'signOut':signOut();break;case 'uploadCloud':cloudSave(true);break;case 'downloadCloud':cloudLoad(true);break}}
+ case 'sentenceMode': startStudy(data.phrases.filter(isSentenceMaterial).map(p => p.id)); break;
+ case 'studyFavorites': startStudy(data.phrases.filter(p => isSentenceMaterial(p) && data.favorites.includes(p.id)).map(p => p.id)); break;
+ case 'import':$('#importFile').click();break;case 'export':downloadJSON(data,'essaybook-backup-'+new Date().toISOString().slice(0,10)+'.json');break;case 'chooseEssay':ui.essay=null;showPage('essays');break;case 'chatgpt':window.open('https://chatgpt.com','_blank','noopener');break;case 'backEssays':ui.essay=null;showPage('essays');break;case 'toPhrases':showPage('phrases');break;case 'compare':ui.comparison=!ui.comparison;draw();break;case 'showAll':paras(data.essays.find(x=>x.id===ui.essay)?.[ui.variant]).forEach((_,i)=>ui.shown[i]=true);draw();break;case 'hideAll':ui.shown={};ui.readMode='cn';draw();break;case 'reveal':ui.reveal=true;draw();break;case 'prev':ui.studyIndex=(ui.studyIndex-1+ui.studyList.length)%ui.studyList.length;ui.reveal=false;ui.typed='';draw();break;case 'next':ui.studyIndex=(ui.studyIndex+1)%ui.studyList.length;ui.reveal=false;ui.typed='';draw();break;case 'endStudy':ui.studyType='sentence';showPage('phrases');break;case 'addEssay':editEssay(null);break;case 'editEssay':editEssay(data.essays.find(e=>e.id===ui.essay));break;case 'extractSentences':extractSentences();break;case 'connectCloud':initCloud();break;case 'sendMagic':sendMagic();break;case 'signOut':signOut();break;case 'uploadCloud':cloudSave(true);break;case 'downloadCloud':cloudLoad(true);break}}
 function recordReview(id, last) {
   const old = data.reviews[id] || { known: 0, again: 0 };
   data.reviews[id] = { ...old, [last]: (old[last] || 0) + 1, last, at: new Date().toISOString() };
@@ -68,7 +382,7 @@ function startChallenge() {
 
   const candidates = new Map();
   for (const phrase of data.phrases) {
-    if (phrase?.id && typeof phrase.en === 'string' && phrase.en.trim()) {
+    if (isSentenceMaterial(phrase)) {
       candidates.set(phrase.id, phrase);
     }
   }
@@ -125,7 +439,7 @@ function renderChallenge() {
   const round = ui.challenge;
   const heading = `${btn('← 返回背诵首页', 'endChallenge', 'ghost')}<h1 class="pageTitle challenge-title" id="challenge-title" tabindex="-1">随机默写</h1>`;
   if (!round) {
-    return `${heading}<div class="panel challenge-panel"><p class="sub">素材库暂时没有可以默写的英文表达。</p>${btn('打开素材库', 'toPhrases', 'primary')}</div>`;
+    return `${heading}<div class="panel challenge-panel"><p class="sub">素材库暂时没有可以默写的作文句子。</p>${btn('打开素材库', 'toPhrases', 'primary')}</div>`;
   }
 
   const total = round.phrases.length;
@@ -204,13 +518,13 @@ async function initCloud(){
     const accountChanged=user?.id!==session.user.id;
     const challengeOpen=ui.page==='challenge';
     user=session.user;
-    if(accountChanged){clearChallenge();synced=false;if(challengeOpen)draw()}
+    if(accountChanged){clearChallenge();synced=false;cloudError='';if(challengeOpen)draw()}
     setTimeout(()=>cloudLoad(false),0)
    }
-   if(event==='SIGNED_OUT'){clearChallenge();user=null;synced=false;draw()}
+   if(event==='SIGNED_OUT'){clearChallenge();user=null;synced=false;cloudError='';draw()}
   });
   draw();
- }catch(e){toast('连接失败：'+e.message)}
+ }catch(e){reportCloudError('连接失败',e)}
 }
 async function sendMagic(){
  const email=$('#supEmail')?.value.trim();if(!email)return toast('请输入登录邮箱');
@@ -223,28 +537,32 @@ async function cloudSave(explicit=false){
  try{
   const stamp=new Date().toISOString();
   const {error}=await db.from('essaybook_data').upsert({owner:user.id,payload:data,updated_at:stamp},{onConflict:'owner'});
-  if(error)throw error;lastCloudStamp=stamp;localDirty=false;synced=true;
+  if(error)throw error;lastCloudStamp=stamp;localDirty=false;synced=true;cloudError='';
   if(explicit)toast('✓ 云端同步成功');navBar();
- }catch(e){synced=false;toast('云端保存失败：'+e.message)}
+ }catch(e){reportCloudError('云端保存失败',e)}
 }
 async function cloudLoad(explicit=false){
  if(!db||!user)return;
+ const owner = user.id;
  try{
-  const {data:r,error}=await db.from('essaybook_data').select('payload,updated_at').eq('owner',user.id).maybeSingle();
+  const {data:r,error}=await db.from('essaybook_data').select('payload,updated_at').eq('owner',owner).maybeSingle();
+  if(user?.id!==owner)return;
   if(error)throw error;
   if(r?.payload&&Array.isArray(r.payload.essays)){
    if(localDirty&&!explicit){toast('本地有未同步修改，暂不覆盖');return}
-   if(data.essays.length&&!explicit&&JSON.stringify(data)!==JSON.stringify(r.payload)){
-    // Preserve a recovery copy before replacing local data with the authoritative cloud snapshot.
-    localStorage.setItem('essaybook-recovery-'+Date.now(),JSON.stringify(data));
+   const incoming = {...blank(),...r.payload};
+   if (!sameSnapshot(data, incoming)) {
+    if (!sameSnapshot(data, blank())) saveRecoveryCopy(data);
+    saveLocal(incoming);
+    data = incoming;
    }
-   data={...blank(),...r.payload};saveLocal();lastCloudStamp=r.updated_at||'';localDirty=false;synced=true;draw();
+   lastCloudStamp=r.updated_at||'';localDirty=false;synced=true;cloudError='';draw();
    if(explicit)toast('✓ 已加载云端资料');
   }else if(data.essays.length){await cloudSave(true)}
-  else{synced=true;draw()}
- }catch(e){synced=false;toast('同步失败：'+e.message)}
+  else{synced=true;cloudError='';draw()}
+ }catch(e){if(user?.id===owner)reportCloudError('同步失败',e)}
 }
-async function signOut(){if(db)await db.auth.signOut();clearChallenge();user=null;synced=false;draw()}
+async function signOut(){if(db)await db.auth.signOut();clearChallenge();user=null;synced=false;cloudError='';draw()}
 if(initialCloudPending)window.addEventListener('load',async()=>{
  try{await initCloud()}finally{initialCloudPending=false}
 });

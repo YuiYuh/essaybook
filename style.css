@@ -14,3 +14,32 @@
 .challenge-counts div{background:var(--accent2);border-radius:10px;padding:12px;text-align:center}
 .challenge-counts dt{font-size:13px;color:#59685f}
 .challenge-counts dd{font-size:24px;font-weight:650;margin:3px 0 0}
+
+.home-expression-link { margin-bottom: 22px; }
+.expression-search { margin-bottom: 12px; }
+.expression-search .search { min-height: 46px; font-size: 16px; }
+.expression-search .select, .expression-search .btn { min-height: 44px; }
+.expression-search .btn[aria-pressed="true"] { background: var(--accent2); border-color: #a9bdad; color: var(--accent); }
+.expression-suggestions { gap: 7px; }
+.expression-suggestions .btn { min-height: 36px; padding: 7px 12px; }
+.expression-count { color: #59685f; margin: 22px 0 12px; }
+.expression-group + .expression-group { margin-top: 22px; }
+.expression-group h2 { margin: 0 0 9px; }
+.expression-group .phraseList {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+}
+.phrase-content { min-width: 0; overflow-wrap: anywhere; }
+.phrase-content b { font-size: 17px; }
+.phrase .phrase-example { color: #58665d; }
+.phrase-actions { flex: none; gap: 4px; flex-wrap: nowrap; }
+.phrase-actions .btn { min-height: 40px; padding: 8px 10px; }
+.phrase-actions .fav { min-width: 36px; min-height: 40px; }
+.expression-more { margin-top: 12px; }
+
+@media (max-width: 680px) {
+  .expression-search .search { flex-basis: 100%; }
+  .phrase { padding: 13px; gap: 8px; }
+  .phrase-actions .btn, .phrase-actions .fav { min-height: 44px; }
+  .toast { bottom: calc(64px + env(safe-area-inset-bottom)); }
+}

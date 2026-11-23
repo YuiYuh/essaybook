@@ -5,7 +5,7 @@
 ## 配置已完成
 cloud-config.js 已配置 Supabase URL 和公开 Publishable Key。没有包含 Secret Key、service_role 密钥或私人作文数据。
 
-然后将 index.html、style.css、app.js、cloud-config.js 这四个文件上传至 YuiYuh/essaybook 仓库根目录（覆盖旧文件）。不要把私人素材JSON上传至公共仓库。
+部署 EssayBook 时，将 index.html、style.css、expressions.js、app.js、cloud-config.js 放在 YuiYuh/essaybook 仓库根目录。expressions.js 提供「替换表达」的内置搭配和例句。不要把私人素材 JSON 上传至公共仓库。
 
 首次加载：在登录页面填邮箱。Supabase Authentication → URL Configuration 的 Site URL、Redirect URLs 应设置为 https://yuiyuh.github.io/essaybook/ 。
 
