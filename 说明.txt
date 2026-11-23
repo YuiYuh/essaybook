@@ -1,0 +1,12 @@
+# EssayBook 自动登录与同步版
+
+已经实现：公开 Supabase URL 固定在 cloud-config.js；公开 Publishable Key 固定后，各设备无需再次填写；邮箱登录后自动载入云端作文；编辑及背诵进度自动保存；应用重新可见时重新载入云端数据。
+
+## 配置已完成
+cloud-config.js 已配置 Supabase URL 和公开 Publishable Key。没有包含 Secret Key、service_role 密钥或私人作文数据。
+
+然后将 index.html、style.css、app.js、cloud-config.js 这四个文件上传至 YuiYuh/essaybook 仓库根目录（覆盖旧文件）。不要把私人素材JSON上传至公共仓库。
+
+首次加载：在登录页面填邮箱。Supabase Authentication → URL Configuration 的 Site URL、Redirect URLs 应设置为 https://yuiyuh.github.io/essaybook/ 。
+
+注意：同步使用最后写入者覆盖策略；如果同时在多台设备离线编辑，可能发生数据冲突，建议偶尔导出备份。
