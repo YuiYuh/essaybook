@@ -9,7 +9,7 @@ let data=loadData(), config=loadConfig(), db=null, user=null, synced=false, loca
 let cloudError = '';
 let initialCloudPending = Boolean(config.url && config.key);
 const PHRASE_PAGE_SIZE = 40;
-let ui={page:'home',challenge:null,essay:null,variant:'final',readMode:'cn',shown:{},phraseQuery:'',phraseFilter:'all',phraseLimit:PHRASE_PAGE_SIZE,essayFilter:'all',onlyFavorites:false,sentenceFormat:'picture',sentenceSection:'opening',studyList:[],studyIndex:0,studyTitle:'好句背诵',studyReturn:'phrases',reveal:false,typed:'',comparison:false};
+let ui={page:'home',challenge:null,essay:null,variant:'final',readMode:'cn',shown:{},phraseQuery:'',phraseFilter:'all',phraseLimit:PHRASE_PAGE_SIZE,essayFilter:'all',onlyFavorites:false,sentenceKind:'essay',sentenceFormat:'picture',sentenceSection:'opening',studyList:[],studyIndex:0,studyTitle:'好句背诵',studyReturn:'phrases',reveal:false,typed:'',comparison:false};
 function loadData(){try{return {...blank(),...JSON.parse(localStorage.getItem(KEY))}}catch{return blank()}}
 function loadConfig(){let stored={};try{stored=JSON.parse(localStorage.getItem(CONFIG))||{}}catch{}const preset=window.ESSAYBOOK_CLOUD||{};const ready=preset.key && !preset.key.startsWith('REPLACE_WITH_');return ready?{url:preset.url,key:preset.key}:stored}
 function recoveryKeys() {
@@ -138,12 +138,27 @@ function isSentenceMaterial(phrase) {
   return phrase?.id && typeof phrase.en === 'string' && phrase.en.trim() && /句/.test(phrase.category || '');
 }
 
-const SENTENCE_FORMATS = [
-  {id:'picture', label:'看图大作文'},
-  {id:'chart', label:'图表大作文'},
-  {id:'invitation', label:'邀请函'},
-  {id:'notice', label:'通知与招募'},
+const SENTENCE_KINDS = [
+  {id:'essay', label:'大作文'},
+  {id:'task', label:'小作文'},
   {id:'other', label:'其他好句'},
+];
+const SENTENCE_FORMATS = [
+  {id:'picture', kind:'essay', label:'看图大作文', plan:'先写画面里的动作或对比，再用画面证据解释寓意，最后给出具体建议。'},
+  {id:'chart', kind:'essay', label:'图表大作文', plan:'先交代图表主题，选最能说明问题的数据，再解释可能原因并给出判断。'},
+  {id:'material', kind:'essay', label:'材料大作文', plan:'先用自己的话概括材料并表态，再写理由或反例，最后收回同一个观点。'},
+  {id:'reply', kind:'task', label:'回信与多任务', plan:'先接住来信，主体按题干顺序逐点回答，结尾说清下一步。'},
+  {id:'invitation', kind:'task', label:'邀请函', plan:'开头说明邀请谁做什么，主体写时间、地点和安排，需要时在结尾请对方确认。'},
+  {id:'suggestion', kind:'task', label:'建议信', plan:'开头交代要解决的问题，主体每条建议都配一个理由，结尾可以建议试行。'},
+  {id:'introduction', kind:'task', label:'介绍与推荐', plan:'先说清介绍对象，再给具体特点或推荐理由，结尾给出体验或报名方式。'},
+  {id:'notice', kind:'task', label:'通知与招募', plan:'先说通知什么和面向谁，主体写安排或要求，结尾交代截止和联系方式。'},
+  {id:'minutes', kind:'task', label:'会议纪要', plan:'先记会议基本信息，主体记讨论和决议，结尾记负责人、期限或下次检查。'},
+  {id:'apology', kind:'task', label:'道歉信', plan:'先为具体失误道歉，主体简述原因并提出补救，结尾确认对方是否方便。'},
+  {id:'courtesy', kind:'task', label:'感谢与祝贺', plan:'开头点明感谢的帮助或祝贺的成就，主体补一处具体细节，结尾给贴合的祝愿。'},
+  {id:'inquiry', kind:'task', label:'询问与求助', plan:'先写所问事项，按条说明问题或困难，结尾给方便对方回复的方式。'},
+  {id:'complaint', kind:'task', label:'投诉信', plan:'先写具体问题，主体说明影响和期望的解决办法，结尾请对方确认处理时间。'},
+  {id:'application', kind:'task', label:'申请信', plan:'先写申请的岗位，再用一个经历证明能力，结尾说明可面试或补充材料。'},
+  {id:'other', kind:'other', label:'其他好句'},
 ];
 const SENTENCE_SECTIONS = [
   {id:'opening', label:'首段'},
@@ -158,9 +173,14 @@ function getSentenceBank() {
     const key = buckets.has(format) && SENTENCE_SECTIONS.some(item => item.id === section) ? format : 'other';
     buckets.get(key).push(phrase);
   }
-  const formats = SENTENCE_FORMATS.map(format => ({...format, count:buckets.get(format.id).length})).filter(format => format.count);
+  const availableFormats = SENTENCE_FORMATS.map(format => ({...format, count:buckets.get(format.id).length})).filter(format => format.count);
+  const kinds = SENTENCE_KINDS.map(kind => ({
+    ...kind, count:availableFormats.filter(format => format.kind === kind.id).reduce((sum, format) => sum + format.count, 0),
+  })).filter(kind => kind.count);
+  const kind = kinds.find(item => item.id === ui.sentenceKind) || kinds[0];
+  if (!kind) return {groups:new Map(), cards:[]};
+  const formats = availableFormats.filter(format => format.kind === kind.id);
   const format = formats.find(item => item.id === ui.sentenceFormat) || formats[0];
-  if (!format) return {formats, groups:[], cards:[]};
 
   const bank = buckets.get(format.id);
   const sections = SENTENCE_SECTIONS.map(section => ({
@@ -175,11 +195,11 @@ function getSentenceBank() {
     if (!groups.has(use)) groups.set(use, []);
     groups.get(use).push(phrase);
   }
-  return {formats, format, sections, section, groups, cards};
+  return {kinds, kind, formats, format, sections, section, groups, cards};
 }
 
 function renderSentenceBank() {
-  const {formats, format, sections, section, groups, cards} = getSentenceBank();
+  const {kinds, kind, formats, format, sections, section, groups, cards} = getSentenceBank();
   const heading = '<h1 class="pageTitle">分类背诵</h1><p class="sub">按题型和段落选句。先看句子适合什么场景，再用中文提示练习。</p>';
   if (!format) return heading + empty('还没有可背的好句', '可以从自己的作文中提取，或导入已有素材。');
 
@@ -188,12 +208,16 @@ function renderSentenceBank() {
     data-action="${action}:${item.id}" aria-pressed="${active}">${item.label}<span>${item.count}</span></button>`;
   return `${heading}
     <div class="recall-controls">
-      <div class="actions recall-filters" role="group" aria-label="作文题型">
+      ${kinds.length > 1 ? `<div class="actions recall-filters" role="group" aria-label="大作文或小作文">
+        ${kinds.map(item => filterButton(item, 'recallKind', item.id === kind.id)).join('')}
+      </div>` : ''}
+      ${formats.length > 1 ? `<div class="actions recall-filters" role="group" aria-label="作文题型">
         ${formats.map(item => filterButton(item, 'recallFormat', item.id === format.id)).join('')}
-      </div>
+      </div>` : ''}
       ${sections.length ? `<div class="actions recall-filters" role="group" aria-label="段落位置">
         ${sections.map(item => filterButton(item, 'recallSection', item.id === section.id)).join('')}
       </div>` : ''}
+      ${format.plan ? `<p class="recall-plan">${esc(format.plan)}</p>` : ''}
       <div class="actions recall-start">
         <p class="counter">${format.label}${section ? ` · ${section.label}` : ''} · ${cards.length} 句</p>
         ${priority && priority < cards.length ? btn(`先背 ${priority} 句重点`, 'recallPriority', 'primary') : ''}
@@ -484,9 +508,13 @@ function moveStudy(step) {
 function handleRecallAction(action) {
   const [command, ...parts] = action.split(':');
   const value = parts.join(':');
-  if (command === 'recallFormat' || command === 'recallSection') {
+  if (command === 'recallKind' || command === 'recallFormat' || command === 'recallSection') {
+    if (command === 'recallKind') {
+      ui.sentenceKind = value;
+      ui.sentenceSection = 'opening';
+    }
     if (command === 'recallFormat') ui.sentenceFormat = value;
-    else ui.sentenceSection = value;
+    if (command === 'recallSection') ui.sentenceSection = value;
     draw();
     document.querySelector(`[data-action="${CSS.escape(action)}"]`)?.focus({preventScroll:true});
     return;

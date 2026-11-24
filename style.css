@@ -49,6 +49,7 @@
 .recall-filter { min-height: 42px; padding: 8px 11px; }
 .recall-filter span { font-variant-numeric: tabular-nums; color: #68766b; }
 .recall-filter[aria-pressed="true"] { background: var(--accent2); color: var(--accent); border-color: #a9bdad; }
+.recall-plan { color: #52665a; font-size: 13px; line-height: 1.7; margin: 12px 0 0; }
 .recall-start { margin-top: 13px; }
 .recall-start .counter { flex: 1 0 auto; color: #59685f; margin: 0; }
 .recall-group-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
