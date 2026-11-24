@@ -8,10 +8,11 @@ const RECOVERY_PREFIX = 'essaybook-recovery-';
 const blank=()=>({schemaVersion:1,essays:[],phrases:[],favorites:[],reviews:{},collections:[]});
 let data=loadData(), config=loadConfig(), db=null, user=null, synced=false, localDirty=false;
 let localRevision = 0;
+let contentDirty = false;
 let cloudError = '';
 let initialCloudPending = Boolean(config.url && config.key);
 const PHRASE_PAGE_SIZE = 40;
-let ui={page:'home',challenge:null,essay:null,variant:'final',readMode:'cn',shown:{},phraseQuery:'',phraseFilter:'expressions',phraseLimit:PHRASE_PAGE_SIZE,essayFilter:'all',onlyFavorites:false,sentenceKind:'essay',sentenceFormat:'picture',sentenceSection:'opening',studySelection:new Set(),showStudySelection:false,studyList:[],studyResults:new Map(),studyIndex:0,studyTitle:'好句背诵',studyReturn:'phrases',reveal:false,typed:'',comparison:false};
+let ui={page:'home',challenge:null,essay:null,variant:'final',readMode:'cn',shown:{},phraseQuery:'',phraseFilter:'expressions',phraseLimit:PHRASE_PAGE_SIZE,essayFilter:'all',onlyFavorites:false,sentenceKind:'essay',sentenceFormat:'picture',sentenceSection:'opening',studySelection:new Set(),showStudySelection:false,studyList:[],studyResults:new Map(),studyIndex:0,studyTitle:'好句背诵',studyReturn:'phrases',reveal:false,typed:'',comparison:false,changesOnly:false};
 function loadData(){try{return {...blank(),...JSON.parse(localStorage.getItem(KEY))}}catch{return blank()}}
 function loadConfig(){let stored={};try{stored=JSON.parse(localStorage.getItem(CONFIG))||{}}catch{}const preset=window.ESSAYBOOK_CLOUD||{};const ready=preset.key && !preset.key.startsWith('REPLACE_WITH_');return ready?{url:preset.url,key:preset.key}:stored}
 function recoveryKeys() {
@@ -68,8 +69,9 @@ function sameSnapshot(left, right) {
     keys.every(key => Object.hasOwn(right, key) && sameSnapshot(left[key], right[key]));
 }
 let saveTimer;
-function save() {
+function save({practiceOnly = false} = {}) {
   localDirty = true;
+  contentDirty ||= !practiceOnly;
   localRevision++;
   try {
     saveLocal();
@@ -109,7 +111,15 @@ function reportCloudError(label, error) {
 const countWords=s=>(String(s||'').match(/\b[\w'-]+\b/g)||[]).length;
 const paras=s=>String(s||'').split(/\n\s*\n/).map(x=>x.trim()).filter(Boolean);
 const uniq=a=>[...new Set(a)];
-function showPage(p){if(p!=='challenge')clearChallenge();ui.page=p;ui.comparison=false;draw();scrollTo(0,0)}
+function showPage(page) {
+  flushRoundTyping();
+  if (page !== 'challenge') clearChallenge();
+  ui.page = page;
+  ui.comparison = false;
+  ui.changesOnly = false;
+  draw();
+  scrollTo(0, 0);
+}
 function btn(label, action, cls = '') {
   return `<button type="button" class="btn ${cls}" data-action="${esc(action)}">${label}</button>`;
 }
@@ -150,6 +160,7 @@ function renderHome() {
   const recent = data.essays.slice().reverse().slice(0, 3);
   return `<div class="home-page">
     <h1 class="pageTitle">学习首页</h1>
+    ${renderRoundResume()}
     ${renderDailyStudy()}
     <div class="home-tools" role="group" aria-label="学习工具">
       ${btn('按题型分类背诵 <span aria-hidden="true">→</span>', 'sentenceMode', 'ghost')}
@@ -171,7 +182,45 @@ function renderHome() {
     </section></div>`;
 }
 function renderEssays(){if(ui.essay)return renderEssayDetail();const list=data.essays.filter(e=>ui.essayFilter==='all'||e.kind===ui.essayFilter);return `${layoutHeader('我的作文','原稿、修改稿与推荐背诵版。')}<div class="toolbar"><div class="seg">${[['all','全部'],['大作文','大作文'],['小作文','小作文']].map(([k,v])=>`<button class="${ui.essayFilter===k?'on':''}" data-essayfilter="${k}">${v}</button>`).join('')}</div>${btn('导入作文数据','import')}${btn('新增作文','addEssay','soft')}</div>${list.length?`<div class="essayGrid">${list.map(e=>`<button class="essayCard" data-essay="${esc(e.id)}"><div><span class="tag">${esc(e.kind)}</span><span class="tag grey">${esc(e.topic)}</span><h3>${esc(e.year)} · ${esc(e.title)}</h3></div><div class="foot"><span>${countWords(e.original)} 词原稿</span><span>查看并背诵 →</span></div></button>`).join('')}</div>`:empty('暂无作文','请先导入作文数据，或者新建一篇。')}`}
-function renderEssayDetail(){const e=data.essays.find(x=>x.id===ui.essay);if(!e){ui.essay=null;return renderEssays()}const source=e[ui.variant]||'';const arr=paras(source);const labels={original:'手写原稿',revised:'AI修改稿',final:'背诵版'};let comparison=ui.comparison?`<div class="compare"><div class="readingBox"><div class="eyebrow">ORIGINAL / 原稿</div><div class="article">${esc(e.original)}</div></div><div class="readingBox"><div class="eyebrow">REVISED / 修改稿</div><div class="article">${esc(e.revised)}</div></div></div>`:'';let article=arr.map((p,i)=>`<div class="readingBlock"><div class="paraHeader"><span class="paraLabel">PARAGRAPH ${String(i+1).padStart(2,'0')}</span>${btn(ui.shown[i]?'隐藏':'显示','togglePara:'+i,'ghost')}</div>${ui.readMode==='cn'?`<div class="cnHint">第 ${i+1} 段 · 根据这一段的观点自行回忆英文，点击下面区域查看原文。</div>`:''}${ui.readMode==='en'||ui.shown[i]?`<p class="article paragraph">${esc(p)}</p>`:`<div class="hiddenText" data-action="togglePara:${i}">英文已隐藏 · 点击展开核对</div>`}</div>`).join('');return `<button class="btn ghost" data-action="backEssays">← 返回作文库</button><div class="eyebrow" style="margin-top:20px">${esc(e.year)} / ${esc(e.kind)}</div><h1 class="pageTitle">${esc(e.title)}</h1><p class="sub">${esc(e.note||'')} · ${countWords(source)} 词</p><div class="toolbar"><div class="seg">${[['original','原稿'],['revised','AI修改'],['final','背诵版']].map(([k,v])=>`<button class="${ui.variant===k?'on':''}" data-variant="${k}">${v}</button>`).join('')}</div>${btn(ui.comparison?'退出对照':'左右对照','compare')}${btn('编辑当前版本','editEssay')}${btn('添加到句子库','extractSentences','soft')}</div>${ui.comparison?comparison:`<div class="toolbar"><div class="seg">${[['en','全文显示'],['cn','隐藏英文']].map(([k,v])=>`<button class="${ui.readMode===k?'on':''}" data-readmode="${k}">${v}</button>`).join('')}</div>${btn('全部显示','showAll')}${btn('全部隐藏','hideAll')}${source.trim() ? btn('记录整篇背诵', 'recordEssay', 'soft') : ''}</div><div class="readingBox">${article}</div>`}`}
+function renderEssayDetail() {
+  const essay = data.essays.find(item => item.id === ui.essay);
+  if (!essay) {
+    ui.essay = null;
+    return renderEssays();
+  }
+  const source = essay[ui.variant] || '';
+  const variants = [['original','原稿'], ['revised','AI修改'], ['final','背诵版']];
+  const metadata = [essay.note, `${countWords(source)} 词`].filter(Boolean).map(esc).join(' · ');
+  const heading = `<button type="button" class="btn ghost" data-action="backEssays">← 返回作文库</button>
+    <div class="eyebrow essay-context">${esc(essay.year)} / ${esc(essay.kind)}</div>
+    <h1 class="pageTitle">${esc(essay.title)}</h1>
+    <p class="sub">${metadata}</p>
+    <div class="toolbar">
+      <div class="seg">${variants.map(([id,label]) => `<button type="button" class="${ui.variant === id ? 'on' : ''}"
+        data-variant="${id}">${label}</button>`).join('')}</div>
+      ${btn(ui.comparison ? '退出对照' : '逐句对照', 'compare')}
+      ${btn('编辑当前版本', 'editEssay')}
+      ${btn('添加到句子库', 'extractSentences', 'soft')}
+    </div>`;
+  if (ui.comparison) return heading + renderEssayComparison(essay, ui.changesOnly);
+  const article = paras(source).map((paragraph, index) => `<div class="readingBlock">
+    <div class="paraHeader">
+      <span class="paraLabel">PARAGRAPH ${String(index + 1).padStart(2, '0')}</span>
+      ${btn(ui.shown[index] ? '隐藏' : '显示', 'togglePara:' + index, 'ghost')}
+    </div>
+    ${ui.readMode === 'cn' ? `<div class="cnHint">第 ${index + 1} 段 · 根据这一段的观点自行回忆英文，点击下面区域查看原文。</div>` : ''}
+    ${ui.readMode === 'en' || ui.shown[index] ? `<p class="article paragraph">${esc(paragraph)}</p>`
+      : `<div class="hiddenText" data-action="togglePara:${index}">英文已隐藏 · 点击展开核对</div>`}
+  </div>`).join('');
+  return `${heading}
+    <div class="toolbar">
+      <div class="seg">${[['en','全文显示'],['cn','隐藏英文']].map(([id,label]) =>
+        `<button type="button" class="${ui.readMode === id ? 'on' : ''}" data-readmode="${id}">${label}</button>`).join('')}</div>
+      ${btn('全部显示', 'showAll')}${btn('全部隐藏', 'hideAll')}
+      ${typeof source === 'string' && source.trim() ? btn('记录整篇背诵', 'recordEssay', 'soft') : ''}
+    </div>
+    <div class="readingBox">${article}</div>`;
+}
 function normalizeSearch(value) {
   return String(value ?? '').normalize('NFKC').toLowerCase().replace(/[‘’]/g, "'").replace(/\s+/g, ' ').trim();
 }
@@ -412,7 +461,7 @@ function recordEssayPractice() {
   const essay = data.essays.find(item => item.id === ui.essay);
   if (typeof essay?.[ui.variant] !== 'string' || !essay[ui.variant].trim()) return toast('当前版本还没有正文');
   addPractice(essay.id, new Date().toISOString(), 'essay', ui.variant);
-  save();
+  save({practiceOnly:true});
   toast('已记下这次整篇背诵');
 }
 
@@ -553,16 +602,15 @@ function startCategoryStudy(cards, bank, label = '') {
   startStudy(cards.map(phrase => phrase.id), {title, returnPage:'sentences'});
 }
 
-function getPhraseResults() {
-  const query = normalizeSearch(ui.phraseQuery);
+function getPhraseResults({phraseQuery = ui.phraseQuery, phraseFilter = ui.phraseFilter, onlyFavorites = ui.onlyFavorites} = {}) {
+  const query = normalizeSearch(phraseQuery);
   const favoriteIds = new Set(data.favorites);
-  const favoriteMatches = phrase => !ui.onlyFavorites || favoriteIds.has(phrase.id);
+  const favoriteMatches = phrase => !onlyFavorites || favoriteIds.has(phrase.id);
   const equivalentTerms = new Set();
   const groups = [];
 
-  const { phraseFilter } = ui;
   const includeBuiltins = ['all', 'expressions'].includes(phraseFilter);
-  if (query || (includeBuiltins && ui.onlyFavorites)) {
+  if (query || (includeBuiltins && onlyFavorites)) {
     for (const concept of writingConcepts) {
       const exactConcept = concept.terms.includes(query);
       const conceptMatches = query && concept.terms.some(term => term.includes(query));
@@ -662,16 +710,8 @@ function updatePhraseResults() {
     </section>` : ''}`;
 }
 
-function attachPhraseSearch() {
-  const input = $('#phraseSearch');
+function onSearchInput(input, applyQuery) {
   let composing = false;
-  function applyQuery() {
-    if (ui.phraseQuery === input.value) return;
-    ui.phraseQuery = input.value;
-    ui.phraseLimit = PHRASE_PAGE_SIZE;
-    updatePhraseResults();
-  }
-
   // Replacing the input during composition dismisses the IME candidate list.
   input.addEventListener('compositionstart', () => { composing = true; });
   input.addEventListener('compositionend', () => {
@@ -681,6 +721,17 @@ function attachPhraseSearch() {
   input.addEventListener('input', event => {
     if (!composing && !event.isComposing) applyQuery();
   });
+}
+
+function attachPhraseSearch() {
+  const input = $('#phraseSearch');
+  function applyQuery() {
+    if (ui.phraseQuery === input.value) return;
+    ui.phraseQuery = input.value;
+    ui.phraseLimit = PHRASE_PAGE_SIZE;
+    updatePhraseResults();
+  }
+  onSearchInput(input, applyQuery);
   $('#phraseFilter').onchange = event => {
     ui.phraseFilter = event.target.value;
     ui.phraseLimit = PHRASE_PAGE_SIZE;
@@ -873,7 +924,157 @@ function renderStudy() {
 }
 function renderSettings(){return `${layoutHeader('账号与同步','只需要邮箱登录；网站自动连接云端，背诵记录自动保存。')}<div class="settingsGrid"><div class="panel"><div class="panelTitle"><h2>邮箱登录与自动同步</h2></div><p class="sub">${user?'已登录：'+esc(user.email||'当前账号'):'使用同一邮箱登录 iPad、iPhone 和 Mac，作文和背诵进度自动同步。'}</p><div class="notice" id="cloudSyncNotice" role="status">${esc(cloudNotice())}</div>${!user?`<div class="field"><label>邮箱（接收登录链接）</label><input id="supEmail" type="email" placeholder="your@email.com" autocomplete="email"/></div><div class="actions">${btn('发送邮箱登录链接','sendMagic','primary')}${btn('重新连接','connectCloud')}</div>`:`<div class="actions">${btn('立即同步','uploadCloud','primary')}${btn('从云端重新载入','downloadCloud')}${btn('退出登录','signOut')}</div>`}<p class="secondary">修改作文或标记背诵结果后会自动上传。不要同时在多台设备离线编辑同一份内容。</p></div><div class="panel"><div class="panelTitle"><h2>个人资料与备份</h2></div><p class="sub">即使云端正常，建议偶尔导出备份。</p><div class="actions">${btn('导入私人学习资料','import','soft')}${btn('导出完整备份','export')}</div><div class="notice warn">请勿把私人作文或 JSON 备份上传到公开 GitHub 仓库。</div></div></div>`}
 
-function attach(){document.querySelectorAll('[data-page]').forEach(e=>e.onclick=()=>{ui.essay=null;showPage(e.dataset.page)});document.querySelectorAll('[data-action]').forEach(e=>e.onclick=()=>act(e.dataset.action));document.querySelectorAll('[data-essay]').forEach(e=>e.onclick=()=>{ui.essay=e.dataset.essay;ui.variant='final';ui.shown={};ui.readMode='en';showPage('essays')});document.querySelectorAll('[data-variant]').forEach(e=>e.onclick=()=>{ui.variant=e.dataset.variant;ui.shown={};draw()});document.querySelectorAll('[data-readmode]').forEach(e=>e.onclick=()=>{ui.readMode=e.dataset.readmode;draw()});document.querySelectorAll('[data-essayfilter]').forEach(e=>e.onclick=()=>{ui.essayFilter=e.dataset.essayfilter;draw()});let typing=$('#typing');if(typing)typing.oninput=e=>ui.typed=e.target.value;const challengeTyping=$('#challenge-typing');if(challengeTyping)challengeTyping.oninput=e=>ui.challenge.typed=e.target.value}
+function attach() {
+  document.querySelectorAll('[data-page]').forEach(element => element.onclick = () => {
+    ui.essay = null;
+    showPage(element.dataset.page);
+  });
+  document.querySelectorAll('[data-action]').forEach(element => element.onclick = () => act(element.dataset.action));
+  document.querySelectorAll('[data-essay]').forEach(element => element.onclick = () => {
+    ui.essay = element.dataset.essay;
+    ui.variant = 'final';
+    ui.shown = {};
+    ui.readMode = 'en';
+    showPage('essays');
+  });
+  document.querySelectorAll('[data-variant]').forEach(element => element.onclick = () => {
+    ui.variant = element.dataset.variant;
+    ui.shown = {};
+    draw();
+  });
+  document.querySelectorAll('[data-readmode]').forEach(element => element.onclick = () => {
+    ui.readMode = element.dataset.readmode;
+    draw();
+  });
+  document.querySelectorAll('[data-essayfilter]').forEach(element => element.onclick = () => {
+    ui.essayFilter = element.dataset.essayfilter;
+    draw();
+  });
+  const typing = $('#typing');
+  if (typing) typing.oninput = event => {
+    ui.typed = event.target.value;
+    queueRoundTyping();
+  };
+  const challengeTyping = $('#challenge-typing');
+  if (challengeTyping) challengeTyping.oninput = event => {
+    ui.challenge.typed = event.target.value;
+    queueRoundTyping();
+  };
+}
+
+const STUDY_RETURN_PAGES = ['home', 'sentences', 'phrases', 'favorites'];
+let roundTypingTimer;
+
+function newestCheckpoint(first, second) {
+  const a = first.practiceCheckpoint;
+  const b = second.practiceCheckpoint;
+  if (!Number.isFinite(a?.savedAt)) return Number.isFinite(b?.savedAt) ? b : undefined;
+  return Number.isFinite(b?.savedAt) && b.savedAt >= a.savedAt ? b : a;
+}
+
+function activeRoundSnapshot() {
+  if (ui.page === 'study') {
+    const cards = activeStudyCards();
+    const current = cards[ui.studyIndex];
+    if (!current || cards.every(phrase => ui.studyResults.has(phrase.id))) return null;
+    return {
+      kind:'study', ids:cards.map(phrase => phrase.id), cursor:current.id,
+      results:[...ui.studyResults], title:ui.studyTitle, returnPage:ui.studyReturn,
+      typed:ui.typed, revealed:ui.reveal, prompt:[current.en, current.zh ?? ''],
+    };
+  }
+  const round = ui.challenge;
+  if (ui.page !== 'challenge' || !round || round.index >= round.phrases.length) return null;
+  const current = round.phrases[round.index];
+  return {
+    kind:'challenge', ids:round.phrases.map(phrase => phrase.id), cursor:current.id,
+    retry:round.retry.map(phrase => phrase.id), typed:round.typed, revealed:round.revealed,
+    prompt:[current.en, current.zh ?? ''],
+  };
+}
+
+function updateRoundCheckpoint() {
+  clearTimeout(roundTypingTimer);
+  roundTypingTimer = undefined;
+  const round = activeRoundSnapshot();
+  if (sameSnapshot(round, data.practiceCheckpoint?.round ?? null)) return false;
+  data.practiceCheckpoint = {
+    savedAt:Math.max(Date.now(), (data.practiceCheckpoint?.savedAt || 0) + 1), round,
+  };
+  return true;
+}
+
+function saveRoundCheckpoint() {
+  if (updateRoundCheckpoint()) save({practiceOnly:true});
+}
+
+function queueRoundTyping() {
+  clearTimeout(roundTypingTimer);
+  roundTypingTimer = setTimeout(saveRoundCheckpoint, 350);
+}
+
+function flushRoundTyping() {
+  if (roundTypingTimer) saveRoundCheckpoint();
+}
+
+function resumableRound() {
+  const state = data.practiceCheckpoint?.round;
+  if (!state || !Array.isArray(state.ids) || !['study', 'challenge'].includes(state.kind)) return null;
+  const cards = activeStudyCards(new Set(state.ids));
+  const ids = new Set(cards.map(phrase => phrase.id));
+  const results = new Map();
+  for (const pair of Array.isArray(state.results) ? state.results : []) {
+    if (Array.isArray(pair) && ids.has(pair[0]) && STUDY_LEVEL_LABELS.has(pair[1])) results.set(pair[0], pair[1]);
+  }
+  const from = state.ids.indexOf(state.cursor);
+  const target = state.ids.slice(Math.max(0, from)).find(id => ids.has(id));
+  const index = state.kind === 'challenge' || ids.has(state.cursor)
+    ? cards.findIndex(phrase => phrase.id === target)
+    : cards.findIndex(phrase => !results.has(phrase.id));
+  if (index < 0 || (state.kind === 'study' && cards.every(phrase => results.has(phrase.id)))) return null;
+  const current = cards[index];
+  const samePrompt = current.id === state.cursor && current.en === state.prompt?.[0] &&
+    (current.zh ?? '') === state.prompt?.[1];
+  return {
+    kind:state.kind, cards, index, results,
+    retry:cards.slice(0, index).filter(phrase => Array.isArray(state.retry) && state.retry.includes(phrase.id)),
+    title:state.kind === 'challenge' ? '随机默写' : typeof state.title === 'string' && state.title || '好句背诵',
+    returnPage:STUDY_RETURN_PAGES.includes(state.returnPage) ? state.returnPage : 'home',
+    typed:samePrompt && typeof state.typed === 'string' ? state.typed : '',
+    revealed:samePrompt && state.revealed === true,
+  };
+}
+
+function renderRoundResume() {
+  const round = resumableRound();
+  if (!round) return '';
+  const unit = round.kind === 'challenge' ? '题' : '句';
+  return `<section class="resume-round" aria-labelledby="resume-round-heading">
+    <div><h2 class="sectionTitle" id="resume-round-heading">继续上次背诵</h2>
+      <p class="secondary">${esc(round.title)} · 已练 ${round.kind === 'challenge' ? round.index : round.results.size} / ${round.cards.length} ${unit}</p></div>
+    ${btn(`继续第 ${round.index + 1} ${unit}`, 'resumeRound', 'primary')}
+  </section>`;
+}
+
+function resumeRound() {
+  const round = resumableRound();
+  if (!round) return draw();
+  if (round.kind === 'challenge') {
+    ui.challenge = {phrases:round.cards, index:round.index, retry:round.retry, typed:round.typed, revealed:round.revealed};
+    showPage('challenge');
+  } else {
+    ui.studyList = round.cards.map(phrase => phrase.id);
+    ui.studyResults = round.results;
+    ui.studyTitle = round.title;
+    ui.studyReturn = round.returnPage;
+    ui.studyIndex = round.index;
+    ui.typed = round.typed;
+    ui.reveal = round.revealed;
+    showPage('study');
+  }
+  $('#app h1')?.focus({preventScroll:true});
+}
+
 function startStudy(ids, {title='好句背诵', returnPage='phrases'} = {}) {
   if (!ids.length) return toast('请先选择至少一句');
   ui.studyList = ids;
@@ -884,6 +1085,7 @@ function startStudy(ids, {title='好句背诵', returnPage='phrases'} = {}) {
   ui.reveal = false;
   ui.typed = '';
   showPage('study');
+  saveRoundCheckpoint();
   $('#app h1')?.focus({preventScroll:true});
 }
 
@@ -893,6 +1095,7 @@ function moveStudy(step) {
   ui.studyIndex = (ui.studyIndex + step + count) % count;
   ui.reveal = false;
   ui.typed = '';
+  saveRoundCheckpoint();
   draw();
   scrollTo(0, 0);
   $('.recall-panel .question')?.focus({preventScroll:true});
@@ -901,7 +1104,7 @@ function moveStudy(step) {
 function gradeStudy(level) {
   const cards = activeStudyCards();
   const phrase = cards[ui.studyIndex];
-  if (!markStudyLevel(phrase, level)) return;
+  if (!phrase || !STUDY_LEVEL_LABELS.has(level)) return;
   ui.studyResults.set(phrase.id, level);
 
   const ungraded = item => !ui.studyResults.has(item.id);
@@ -910,6 +1113,8 @@ function gradeStudy(level) {
   if (next !== -1) ui.studyIndex = next;
   ui.reveal = false;
   ui.typed = '';
+  updateRoundCheckpoint();
+  markStudyLevel(phrase, level);
   draw();
   scrollTo(0, 0);
   $(next === -1 ? '#study-summary' : '.recall-panel .question')?.focus({preventScroll:true});
@@ -973,32 +1178,86 @@ function handleRecallAction(action) {
   }
   if (command === 'recallAll') startCategoryStudy(bank.cards, bank);
 }
-function act(action){if(action.startsWith('recall'))return handleRecallAction(action);if(action.startsWith('togglePara:')){let i=+action.split(':')[1];ui.shown[i]=!ui.shown[i];draw();return}if(action.startsWith('mark:'))return gradeStudy(action.slice(5));if(action.startsWith('historyFilter:')){
-  setHistoryFilter(action.slice('historyFilter:'.length));
-  $(`[data-action="${CSS.escape(action)}"]`)?.focus({preventScroll:true});
-  return;
-}switch(action){
- case 'historyToday': historyFilter='0'; historyLimit=HISTORY_PAGE_SIZE; showPage('history'); break;
- case 'historyMore': historyLimit+=HISTORY_PAGE_SIZE; draw(); break;
- case 'recordEssay': recordEssayPractice(); break;
- case 'randomChallenge': startChallenge(); break;
- case 'endChallenge': ui.essay=null; showPage('home'); break;
- case 'revealChallenge': if(!ui.challenge)break; ui.challenge.revealed=true; draw(); $('#challenge-answer')?.focus({preventScroll:true}); break;
- case 'gradeChallenge:known': gradeChallenge('known'); break;
- case 'gradeChallenge:again': gradeChallenge('again'); break;
- case 'retryChallenge': retryChallenge(); break;
- case 'dailyStudy': startDailyStudy(); break;
- case 'retryStudy': retryStudy(); break;
- case 'sentenceMode': showPage('sentences'); break;
- case 'studyFavorites': startStudy(data.phrases.filter(p => isSentenceMaterial(p) && data.favorites.includes(p.id)).map(p => p.id)); break;
- case 'import':$('#importFile').click();break;case 'export':downloadJSON(data,'essaybook-backup-'+new Date().toISOString().slice(0,10)+'.json');break;case 'chooseEssay':ui.essay=null;showPage('essays');break;case 'chatgpt':window.open('https://chatgpt.com','_blank','noopener');break;case 'backEssays':ui.essay=null;showPage('essays');break;case 'toPhrases':showPage('phrases');break;case 'compare':ui.comparison=!ui.comparison;draw();break;case 'showAll':paras(data.essays.find(x=>x.id===ui.essay)?.[ui.variant]).forEach((_,i)=>ui.shown[i]=true);draw();break;case 'hideAll':ui.shown={};ui.readMode='cn';draw();break;case 'reveal':ui.reveal=true;draw();$('.recall-panel .answer')?.focus({preventScroll:true});break;case 'prev':moveStudy(-1);break;case 'next':moveStudy(1);break;case 'endStudy':showPage(ui.studyReturn);break;case 'addEssay':editEssay(null);break;case 'editEssay':editEssay(data.essays.find(e=>e.id===ui.essay));break;case 'extractSentences':extractSentences();break;case 'connectCloud':initCloud();break;case 'sendMagic':sendMagic();break;case 'signOut':signOut();break;case 'uploadCloud':cloudSave(true);break;case 'downloadCloud':cloudLoad(true);break}}
+function act(action) {
+  if (action.startsWith('recall')) return handleRecallAction(action);
+  if (action.startsWith('togglePara:')) {
+    const index = Number(action.slice('togglePara:'.length));
+    ui.shown[index] = !ui.shown[index];
+    return draw();
+  }
+  if (action.startsWith('mark:')) return gradeStudy(action.slice(5));
+  if (action.startsWith('historyFilter:')) {
+    setHistoryFilter(action.slice('historyFilter:'.length));
+    $(`[data-action="${CSS.escape(action)}"]`)?.focus({preventScroll:true});
+    return;
+  }
+  switch (action) {
+    case 'resumeRound': return resumeRound();
+    case 'historyToday':
+      historyFilter = '0';
+      historyLimit = HISTORY_PAGE_SIZE;
+      return showPage('history');
+    case 'historyMore': historyLimit += HISTORY_PAGE_SIZE; return draw();
+    case 'recordEssay': return recordEssayPractice();
+    case 'randomChallenge': return startChallenge();
+    case 'endChallenge': ui.essay = null; return showPage('home');
+    case 'revealChallenge':
+      if (!ui.challenge) return;
+      ui.challenge.revealed = true;
+      saveRoundCheckpoint();
+      draw();
+      return $('#challenge-answer')?.focus({preventScroll:true});
+    case 'gradeChallenge:known': return gradeChallenge('known');
+    case 'gradeChallenge:again': return gradeChallenge('again');
+    case 'retryChallenge': return retryChallenge();
+    case 'dailyStudy': return startDailyStudy();
+    case 'retryStudy': return retryStudy();
+    case 'sentenceMode': return showPage('sentences');
+    case 'studyFavorites':
+      return startStudy(data.phrases.filter(phrase => isSentenceMaterial(phrase) && data.favorites.includes(phrase.id)).map(phrase => phrase.id));
+    case 'import': return $('#importFile').click();
+    case 'export': return downloadJSON(data, 'essaybook-backup-' + new Date().toISOString().slice(0, 10) + '.json');
+    case 'chooseEssay':
+    case 'backEssays': ui.essay = null; return showPage('essays');
+    case 'chatgpt': return window.open('https://chatgpt.com', '_blank', 'noopener');
+    case 'toPhrases': return showPage('phrases');
+    case 'compare':
+      ui.comparison = !ui.comparison;
+      draw();
+      return $('[data-action="compare"]')?.focus({preventScroll:true});
+    case 'compareChanges':
+      ui.changesOnly = !ui.changesOnly;
+      draw();
+      return $('[data-action="compareChanges"]')?.focus({preventScroll:true});
+    case 'showAll':
+      paras(data.essays.find(essay => essay.id === ui.essay)?.[ui.variant]).forEach((_, index) => ui.shown[index] = true);
+      return draw();
+    case 'hideAll': ui.shown = {}; ui.readMode = 'cn'; return draw();
+    case 'reveal':
+      ui.reveal = true;
+      saveRoundCheckpoint();
+      draw();
+      return $('.recall-panel .answer')?.focus({preventScroll:true});
+    case 'prev': return moveStudy(-1);
+    case 'next': return moveStudy(1);
+    case 'endStudy': return showPage(ui.studyReturn);
+    case 'addEssay': return editEssay(null);
+    case 'editEssay': return editEssay(data.essays.find(essay => essay.id === ui.essay));
+    case 'extractSentences': return extractSentences();
+    case 'connectCloud': return initCloud();
+    case 'sendMagic': return sendMagic();
+    case 'signOut': return signOut();
+    case 'uploadCloud': return cloudSave(true);
+    case 'downloadCloud': return cloudLoad(true);
+  }
+}
 function recordReview(id, last) {
   const old = Object.hasOwn(data.reviews, id) ? data.reviews[id] : { known: 0, again: 0 };
   const at = new Date().toISOString();
   data.practiceLog = datedPractice(data);
   addPractice(id, at, last);
   data.reviews = {...data.reviews, [id]:{...old, [last]:reviewCount(old?.[last]) + 1, last, at}};
-  save();
+  save({practiceOnly:true});
 }
 
 const CHALLENGE_LIMIT = 10;
@@ -1035,12 +1294,20 @@ function startChallenge() {
 function beginChallenge(phrases) {
   ui.challenge = { phrases, index: 0, retry: [], typed: '', revealed: false };
   showPage('challenge');
+  saveRoundCheckpoint();
   $('#challenge-question')?.focus({ preventScroll: true });
 }
 
 function clearChallenge() {
   if (ui.page === 'challenge') ui.page = 'home';
   ui.challenge = null;
+}
+
+function closeActivePractice() {
+  clearTimeout(roundTypingTimer);
+  roundTypingTimer = undefined;
+  clearChallenge();
+  if (ui.page === 'study') ui.page = 'home';
 }
 
 function currentChallengePhrase(phrase) {
@@ -1111,11 +1378,12 @@ function gradeChallenge(last) {
   const phrase = currentChallengePhrase(round.phrases[round.index]);
   if (!phrase) return draw();
 
-  recordReview(phrase.id, last);
   if (last === 'again') round.retry.push(phrase);
   round.index++;
   round.typed = '';
   round.revealed = false;
+  updateRoundCheckpoint();
+  recordReview(phrase.id, last);
   draw();
   ($('#challenge-question') || $('#challenge-summary') || $('#challenge-title')).focus({ preventScroll: true });
 }
@@ -1128,10 +1396,170 @@ function retryChallenge() {
 }
 
 function downloadJSON(obj,name){let blob=new Blob([JSON.stringify(obj,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;a.click();URL.revokeObjectURL(url)}
-function dialog(title,body){$('#dialogHost').innerHTML=`<div class="dialogShade"><div class="dialog"><h2>${title}</h2>${body}<div class="actions">${btn('关闭','closeDialog')}</div></div></div>`;document.querySelector('#dialogHost [data-action="closeDialog"]').onclick=()=>$('#dialogHost').innerHTML=''}
-function editEssay(e){let v=ui.variant||'final';dialog(e?'修改作文版本':'新增作文',`<div class="field"><label>标题</label><input id="editTitle" value="${esc(e?.title||'')}" /></div><div class="field"><label>年份</label><input id="editYear" value="${esc(e?.year||'')}" placeholder="2026" /></div><div class="field"><label>作文类型</label><select class="select" id="editKind"><option ${e?.kind==='大作文'?'selected':''}>大作文</option><option ${e?.kind==='小作文'?'selected':''}>小作文</option></select></div><div class="field"><label>${e?`编辑 ${v}（原稿不受其他版本修改影响）`:'作文原稿'}</label><textarea id="editBody" style="min-height:250px">${esc(e?.[v]||'')}</textarea></div><button class="btn primary" id="saveEssay">保存为当前版本</button>`);$('#saveEssay').onclick=()=>{let t=$('#editTitle').value.trim(),body=$('#editBody').value.trim();if(!t||!body)return toast('标题和正文不能为空');if(e){e[v]=body;e.title=t;e.year=$('#editYear').value.trim();e.kind=$('#editKind').value}else{let id='essay-user-'+Date.now();data.essays.push({id,title:t,year:$('#editYear').value.trim(),kind:$('#editKind').value,topic:'自选',original:body,revised:'',final:body,finalReviewed:false,note:'个人新增作文'})}save();$('#dialogHost').innerHTML='';toast('已保存');draw()}}
+function dialog(title, body) {
+  const host = $('#dialogHost');
+  const opener = document.activeElement;
+  host.innerHTML = `<div class="dialogShade"><div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dialogTitle">
+    <h2 id="dialogTitle">${esc(title)}</h2>${body}
+    <div class="actions"><button type="button" class="btn ghost" data-close-dialog>关闭</button></div>
+  </div></div>`;
+  const panel = host.querySelector('.dialog');
+  const close = () => {
+    host.innerHTML = '';
+    opener?.focus({preventScroll:true});
+  };
+  panel.querySelector('[data-close-dialog]').addEventListener('click', close);
+  panel.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !event.isComposing) close();
+  });
+  return panel;
+}
+
+function editEssay(essay) {
+  const variant = Object.hasOwn(ESSAY_VERSIONS, ui.variant) ? ui.variant : 'final';
+  const panel = dialog(essay ? '修改作文版本' : '新增作文', `
+    <div class="field"><label for="editTitle">标题</label><input id="editTitle" value="${esc(essay?.title || '')}"></div>
+    <div class="essay-editor-meta">
+      <div class="field"><label for="editYear">年份</label><input id="editYear" value="${esc(essay?.year || '')}" placeholder="2026"></div>
+      <div class="field"><label for="editKind">作文类型</label><select class="select" id="editKind">
+        ${['大作文','小作文'].map(kind => `<option ${essay?.kind === kind ? 'selected' : ''}>${kind}</option>`).join('')}
+      </select></div>
+    </div>
+    <div class="field essay-editor-field">
+      <label for="editBody">${essay ? ESSAY_VERSIONS[variant] : '作文原稿'}</label>
+      <textarea id="editBody">${esc(essay?.[variant] || '')}</textarea>
+    </div>
+    <div class="actions essay-editor-tools">
+      <button type="button" class="btn" id="openEditorLookup" aria-controls="editorLookup" aria-expanded="false">查替换表达</button>
+      <span class="secondary">可先选中正文里的词</span>
+    </div>
+    <section id="editorLookup" class="editor-lookup" aria-label="查替换表达" hidden>
+      <div class="toolbar">
+        <input type="search" id="editorPhraseQuery" class="search" aria-label="中文或英文关键词"
+          placeholder="例如：提高效率" maxlength="100" autocomplete="off" enterkeyhint="search">
+        <button type="button" class="btn ghost" id="closeEditorLookup">收起</button>
+      </div>
+      <p class="counter" id="editorLookupStatus" role="status"></p>
+      <ul class="editor-results" id="editorLookupResults"></ul>
+    </section>
+    <button type="button" class="btn primary" id="saveEssay">${essay ? '保存为当前版本' : '保存作文'}</button>`);
+  panel.classList.add('essay-editor');
+  const editor = $('#editBody');
+  attachEditorLookup(editor);
+  $('#saveEssay').onclick = () => {
+    const title = $('#editTitle').value.trim();
+    const body = editor.value.trim();
+    const year = $('#editYear').value.trim();
+    const kind = $('#editKind').value;
+    if (!title || !body) return toast('标题和正文不能为空');
+    if (essay) {
+      const current = data.essays.find(item => item.id === essay.id);
+      if (!current) return toast('找不到要修改的作文');
+      Object.assign(current, {[variant]:body, title, year, kind});
+    } else {
+      data.essays.push({id:'essay-user-' + Date.now(), title, year, kind, topic:'自选',
+        original:body, revised:'', final:body, finalReviewed:false, note:'个人新增作文'});
+    }
+    save();
+    $('#dialogHost').innerHTML = '';
+    toast('已保存');
+    draw();
+  };
+  $('#editTitle').focus({preventScroll:true});
+}
+
+function attachEditorLookup(editor) {
+  const panel = $('#editorLookup');
+  const input = $('#editorPhraseQuery');
+  const opener = $('#openEditorLookup');
+  const results = $('#editorLookupResults');
+  const status = $('#editorLookupStatus');
+  let choices = [];
+  let start = 0, end = 0;
+  let openingWithPointer = false;
+
+  const rememberSelection = () => {
+    const {selectionStart, selectionEnd} = editor;
+    const selected = editor.value.slice(selectionStart, selectionEnd);
+    start = selectionStart;
+    end = selectionEnd;
+    if (!selected.trim()) { start = end; return; }
+    start += selected.length - selected.trimStart().length;
+    end -= selected.length - selected.trimEnd().length;
+  };
+
+  const setOpen = open => {
+    panel.hidden = !open;
+    opener.setAttribute('aria-expanded', String(open));
+  };
+
+  const search = () => {
+    const query = input.value.trim();
+    const entries = [];
+    if (query) {
+      const {groups, imported} = getPhraseResults({phraseQuery:query, phraseFilter:'expressions', onlyFavorites:false});
+      for (const group of groups) {
+        for (const phrase of group.phrases) entries.push({phrase, label:group.label});
+      }
+      for (const phrase of imported) entries.push({phrase, label:''});
+    }
+    const seen = new Set();
+    choices = entries.filter(({phrase}) => {
+      const key = normalizeSearch(phrase.en);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).slice(0, 12);
+    status.textContent = !query ? '输入关键词，点结果即可插入。'
+      : choices.length ? '选择要插入的英文表达' : '暂无匹配，试试更短的关键词。';
+    results.innerHTML = choices.map(({phrase, label}, index) => `<li>
+      <button type="button" class="editor-result" data-insert-expression="${index}" aria-label="插入 ${esc(phrase.en)}">
+        <span><strong lang="en">${esc(phrase.en)}</strong>
+          ${phrase.zh || label ? `<small>${esc([phrase.zh, label].filter(Boolean).join(' · '))}</small>` : ''}</span>
+        <span class="editor-insert" aria-hidden="true">插入</span>
+      </button></li>`).join('');
+  };
+
+  editor.addEventListener('select', () => { if (!openingWithPointer) rememberSelection(); });
+  editor.addEventListener('input', rememberSelection);
+  opener.addEventListener('pointerdown', () => {
+    rememberSelection();
+    openingWithPointer = true;
+  });
+  opener.addEventListener('pointercancel', () => { openingWithPointer = false; });
+  opener.addEventListener('click', () => {
+    if (!openingWithPointer) rememberSelection();
+    openingWithPointer = false;
+    const selected = editor.value.slice(start, end);
+    input.value = selected.length <= input.maxLength && !selected.includes('\n') ? selected : '';
+    setOpen(true);
+    search();
+    panel.scrollIntoView({block:'start'});
+    input.focus({preventScroll:true});
+  });
+  $('#closeEditorLookup').onclick = () => {
+    setOpen(false);
+    opener.focus({preventScroll:true});
+  };
+  panel.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || event.isComposing) return;
+    event.stopPropagation();
+    setOpen(false);
+    opener.focus({preventScroll:true});
+  });
+  onSearchInput(input, search);
+  results.addEventListener('click', event => {
+    const button = event.target.closest('[data-insert-expression]');
+    if (!button) return;
+    const {phrase} = choices[Number(button.dataset.insertExpression)];
+    editor.setRangeText(phrase.en, start, end, 'end');
+    setOpen(false);
+    editor.focus();
+    toast('已插入英文表达');
+  });
+}
 function extractSentences(){const e=data.essays.find(x=>x.id===ui.essay);if(!e)return;let sentences=(e[ui.variant]||'').split(/(?<=[.!?])\s+/).map(s=>s.trim()).filter(s=>s.length>22).slice(0,35);dialog('提取句子到背诵库',`<p class="sub">选择想加入背诵库的句子。中文提示可以稍后自行填写。</p><div style="max-height:330px;overflow:auto">${sentences.map((s,i)=>`<label style="display:block;font-size:13px;line-height:1.8;padding:7px;border-bottom:1px solid #eee"><input type="checkbox" class="sentenceCheck" value="${i}"/> ${esc(s)}</label>`).join('')}</div><button class="btn primary" id="addSentences">加入所选句子</button>`);$('#addSentences').onclick=()=>{let ids=[...document.querySelectorAll('.sentenceCheck:checked')].map(e=>+e.value);for(let i of ids)data.phrases.unshift({id:'custom-'+Date.now()+'-'+i,en:sentences[i],zh:'（请补充中文提示）',example:'',category:'高分句',topic:e.topic,origin:e.year+' '+e.title,status:'待审核'});save();$('#dialogHost').innerHTML='';toast(`添加了 ${ids.length} 句`);draw()}}
-$('#importFile').onchange=async e=>{let file=e.target.files[0];if(!file)return;try{let imported=JSON.parse(await file.text());if(!Array.isArray(imported.essays)||!Array.isArray(imported.phrases))throw Error('不是有效的EssayBook数据文件');if(data.essays.length&&!confirm('导入将合并已有内容（同ID的文章使用导入版本），继续吗？'))return;data.essays=[...data.essays.filter(x=>!imported.essays.some(y=>y.id===x.id)),...imported.essays];data.phrases=[...data.phrases.filter(x=>!imported.phrases.some(y=>y.id===x.id)),...imported.phrases];data.favorites=uniq([...(data.favorites||[]),...(imported.favorites||[])]);Object.assign(data, mergePractice(data, imported));save();toast(`成功导入 ${imported.essays.length} 篇作文、${imported.phrases.length} 条素材`);draw()}catch(err){toast('导入失败：'+err.message)}finally{e.target.value=''}};
+$('#importFile').onchange=async e=>{let file=e.target.files[0];if(!file)return;try{let imported=JSON.parse(await file.text());if(!Array.isArray(imported.essays)||!Array.isArray(imported.phrases))throw Error('不是有效的EssayBook数据文件');if(data.essays.length&&!confirm('导入将合并已有内容（同ID的文章使用导入版本），继续吗？'))return;data.essays=[...data.essays.filter(x=>!imported.essays.some(y=>y.id===x.id)),...imported.essays];data.phrases=[...data.phrases.filter(x=>!imported.phrases.some(y=>y.id===x.id)),...imported.phrases];data.favorites=uniq([...(data.favorites||[]),...(imported.favorites||[])]);Object.assign(data, mergePractice(data, imported));const checkpoint=newestCheckpoint(data,imported);if(checkpoint)data.practiceCheckpoint=checkpoint;save();toast(`成功导入 ${imported.essays.length} 篇作文、${imported.phrases.length} 条素材`);draw()}catch(err){toast('导入失败：'+err.message)}finally{e.target.value=''}};
 $('#openSettings').onclick=()=>showPage('settings');
 async function getCloudUser() {
   const { data: result, error } = await db.auth.getUser();
@@ -1161,12 +1589,12 @@ async function initCloud(){
   db.auth.onAuthStateChange((event,session)=>{
    if(event==='SIGNED_IN'&&session?.user){
     const accountChanged=user?.id!==session.user.id;
-    const challengeOpen=ui.page==='challenge';
+    const practiceOpen=['study', 'challenge'].includes(ui.page);
     user=session.user;
-    if(accountChanged){clearChallenge();clearStudySelection();synced=false;cloudError='';if(challengeOpen)draw()}
+    if(accountChanged){closeActivePractice();clearStudySelection();synced=false;cloudError='';if(practiceOpen)draw()}
     setTimeout(()=>cloudLoad(false),0)
    }
-   if(event==='SIGNED_OUT'){clearChallenge();clearStudySelection();user=null;synced=false;cloudError='';draw()}
+   if(event==='SIGNED_OUT'){closeActivePractice();clearStudySelection();user=null;synced=false;cloudError='';draw()}
   });
   draw();
  }catch(e){reportCloudError('连接失败',e)}
@@ -1219,10 +1647,14 @@ async function writeCloudSnapshot(owner, explicit) {
       if (user?.id !== owner) return;
       if (readError) throw readError;
       const revision = localRevision;
-      const snapshot = {...data};
-      if (remote?.payload && (snapshot.practiceLog || remote.payload.practiceLog)) {
-        Object.assign(snapshot, mergePractice(remote.payload, snapshot));
+      // A background practice save should also keep any essays edited on another device.
+      const cloudData = Array.isArray(remote?.payload?.essays) ? remote.payload : null;
+      const snapshot = {...(!contentDirty && !explicit && cloudData ? cloudData : data)};
+      if (cloudData && (data.practiceLog || cloudData.practiceLog)) {
+        Object.assign(snapshot, mergePractice(cloudData, data));
       }
+      const checkpoint = newestCheckpoint(cloudData || {}, data);
+      if (checkpoint) snapshot.practiceCheckpoint = checkpoint;
       const previousStamp = Date.parse(remote?.updated_at);
       const stamp = new Date(Math.max(Date.now(), Number.isFinite(previousStamp) ? previousStamp + 1 : 0)).toISOString();
       const table = db.from('essaybook_data');
@@ -1246,9 +1678,10 @@ async function writeCloudSnapshot(owner, explicit) {
       }
       cacheOwner(owner);
       localDirty = false;
+      contentDirty = false;
       synced = true;
       cloudError = '';
-      if (changed && ui.page === 'history') draw();
+      if (changed && ['home', 'history'].includes(ui.page)) draw();
       else refreshCloudStatus();
       if (explicit) toast('✓ 云端同步成功');
       return;
@@ -1279,27 +1712,36 @@ async function cloudLoad(explicit=false){
     uploadPractice = !sameSnapshot(incoming.practiceLog, merged.practiceLog);
     Object.assign(incoming, merged);
    }
+   if (previousOwner === owner) {
+    const checkpoint = newestCheckpoint(incoming, data);
+    if (checkpoint && !sameSnapshot(checkpoint, incoming.practiceCheckpoint)) {
+     incoming.practiceCheckpoint = checkpoint;
+     uploadPractice = true;
+    }
+   }
    if (!sameSnapshot(data, incoming)) {
     const onlyPracticeChanged = previousOwner === owner &&
       (data.practiceLog || sameSnapshot(data.reviews, incoming.reviews)) &&
-      sameSnapshot({...data, reviews:null, practiceLog:null}, {...incoming, reviews:null, practiceLog:null});
+      sameSnapshot({...data, reviews:null, practiceLog:null, practiceCheckpoint:null},
+        {...incoming, reviews:null, practiceLog:null, practiceCheckpoint:null});
     if (!onlyPracticeChanged && !sameSnapshot(data, blank())) saveRecoveryCopy(data);
     saveLocal(incoming);
     data = incoming;
    }
    cacheOwner(owner);
    localRevision++;
-   localDirty=uploadPractice;synced=true;cloudError='';draw();
+   localDirty=uploadPractice;contentDirty=false;synced=true;cloudError='';draw();
    if(uploadPractice)await cloudSave();
    if(explicit)toast('✓ 已加载云端资料');
-  }else if(data.essays.length || data.practiceLog){await cloudSave(true)}
+  }else if(data.essays.length || data.practiceLog || data.practiceCheckpoint){await cloudSave(true)}
   else{synced=true;cloudError='';draw()}
  }catch(e){if(user?.id===owner)reportCloudError('同步失败',e)}
 }
-async function signOut(){if(db)await db.auth.signOut();clearChallenge();clearStudySelection();user=null;synced=false;cloudError='';draw()}
+async function signOut(){if(db)await db.auth.signOut();closeActivePractice();clearStudySelection();user=null;synced=false;cloudError='';draw()}
 if(initialCloudPending)window.addEventListener('load',async()=>{
  try{await initCloud()}finally{initialCloudPending=false}
 });
-document.addEventListener('visibilitychange',()=>{if(!document.hidden&&db&&user)cloudLoad(false)});
+document.addEventListener('visibilitychange',()=>{if(document.hidden)flushRoundTyping();else if(db&&user)cloudLoad(false)});
+window.addEventListener('pagehide', flushRoundTyping);
 window.addEventListener('online',()=>{if(db&&user&&localDirty)cloudSave()});
 draw();
