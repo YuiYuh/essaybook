@@ -9,7 +9,7 @@ let data=loadData(), config=loadConfig(), db=null, user=null, synced=false, loca
 let cloudError = '';
 let initialCloudPending = Boolean(config.url && config.key);
 const PHRASE_PAGE_SIZE = 40;
-let ui={page:'home',challenge:null,essay:null,variant:'final',readMode:'cn',shown:{},phraseQuery:'',phraseFilter:'all',phraseLimit:PHRASE_PAGE_SIZE,essayFilter:'all',onlyFavorites:false,sentenceKind:'essay',sentenceFormat:'picture',sentenceSection:'opening',studyList:[],studyIndex:0,studyTitle:'好句背诵',studyReturn:'phrases',reveal:false,typed:'',comparison:false};
+let ui={page:'home',challenge:null,essay:null,variant:'final',readMode:'cn',shown:{},phraseQuery:'',phraseFilter:'expressions',phraseLimit:PHRASE_PAGE_SIZE,essayFilter:'all',onlyFavorites:false,sentenceKind:'essay',sentenceFormat:'picture',sentenceSection:'opening',studyList:[],studyIndex:0,studyTitle:'好句背诵',studyReturn:'phrases',reveal:false,typed:'',comparison:false};
 function loadData(){try{return {...blank(),...JSON.parse(localStorage.getItem(KEY))}}catch{return blank()}}
 function loadConfig(){let stored={};try{stored=JSON.parse(localStorage.getItem(CONFIG))||{}}catch{}const preset=window.ESSAYBOOK_CLOUD||{};const ready=preset.key && !preset.key.startsWith('REPLACE_WITH_');return ready?{url:preset.url,key:preset.key}:stored}
 function recoveryKeys() {
@@ -253,7 +253,8 @@ function getPhraseResults() {
       if (exactConcept) concept.terms.forEach(term => equivalentTerms.add(term));
 
       for (const group of concept.groups) {
-        if (exactConcept || group.terms.includes(query)) {
+        const exactGroup = group.terms.includes(query);
+        if (exactConcept || exactGroup) {
           group.terms.forEach(term => equivalentTerms.add(term));
           group.phrases.forEach(p => equivalentTerms.add(normalizeSearch(p.en)));
         }
@@ -261,10 +262,11 @@ function getPhraseResults() {
         const groupMatches = conceptMatches || (query && group.terms.some(term => term.includes(query)));
         const phrases = group.phrases.filter(p => favoriteMatches(p) &&
           (!query || groupMatches || [p.en, p.zh].some(text => normalizeSearch(text).includes(query))));
-        if (phrases.length) groups.push({ label: group.label, phrases });
+        if (phrases.length) groups.push({ label: group.label, phrases, rank:exactConcept || exactGroup ? 0 : 1 });
       }
     }
   }
+  groups.sort((a, b) => a.rank - b.rank);
 
   const chineseEquivalents = [...equivalentTerms].filter(term => /\p{Script=Han}/u.test(term));
   const imported = [];
@@ -295,12 +297,12 @@ function getPhraseResults() {
 function renderPhrases() {
   return `
     <h1 class="pageTitle">替换表达</h1>
-    <p class="sub">输入想表达的中文，也可以搜想替换的英文。</p>
+    <p class="sub">输入想表达的中文或要替换的英文，按语境挑词，直接复制到作文里。</p>
     <div class="toolbar expression-search" role="search" aria-label="查找写作表达">
       <input id="phraseSearch" class="search" type="search" aria-label="中文意思或英文表达"
-        value="${esc(ui.phraseQuery)}" placeholder="例如：提高、提高效率、important" autocomplete="off" enterkeyhint="search">
+        value="${esc(ui.phraseQuery)}" placeholder="例如：提高、缺乏、important" autocomplete="off" enterkeyhint="search">
       <select id="phraseFilter" class="select" aria-label="素材类型或主题">
-        ${[['all','全部素材'],['expressions','单词短语'],['sentences','作文句子']].map(([value,label]) =>
+        ${[['expressions','单词短语'],['all','全部素材'],['sentences','作文句子']].map(([value,label]) =>
           `<option value="${value}" ${ui.phraseFilter === value ? 'selected' : ''}>${label}</option>`).join('')}
         <optgroup label="我的素材">
           ${['高分句', '高级词组', '高级词汇', '科技', '图表描述', '小作文'].map(label =>
@@ -310,7 +312,7 @@ function renderPhrases() {
       <button type="button" id="phraseFavorites" class="btn" aria-pressed="${ui.onlyFavorites}">只看收藏</button>
     </div>
     <div class="actions expression-suggestions" aria-label="常用查询">
-      ${['提高', '减少', '促进', '重要', '导致', '解决', '占比'].map(query =>
+      ${['提高', '减少', '促进', '重要', '导致', '解决', '占比', '缺乏', '实施', '显著'].map(query =>
         `<button type="button" class="btn soft" data-phrase-query="${query}">${query}</button>`).join('')}
     </div>
     <p class="counter expression-count" id="phraseCount" role="status"></p>
