@@ -699,6 +699,11 @@ function phraseHTML(phrase) {
   const isFavorite = data.favorites.includes(phrase.id);
   const practice = ui.page === 'sentences' && isSentenceMaterial(phrase);
   const last = practice && data.reviews[phrase.id]?.last;
+  const actions = `<div class="actions phrase-actions">
+    ${practice ? btn('背这句','recallOne:' + phrase.id) : '<button type="button" class="btn" data-copy-phrase>复制</button>'}
+    ${phrase.id ? `<button type="button" class="fav ${isFavorite ? 'on' : ''}" data-fav="${esc(phrase.id)}"
+      aria-label="收藏" aria-pressed="${isFavorite}" title="收藏">${isFavorite ? '★' : '☆'}</button>` : ''}
+  </div>`;
   return `<article class="phrase${practice ? ' recall-phrase' : ''}">
     <div class="phrase-content">
       ${practice && phrase.study?.core === true ? '<span class="recall-priority">优先背</span>' : ''}
@@ -707,11 +712,6 @@ function phraseHTML(phrase) {
       ${phrase.example ? `<p class="phrase-example" lang="en">${esc(phrase.example)}</p>` : ''}
       ${practice && phrase.study?.note ? `<p class="recall-note">${esc(phrase.study.note)}</p>` : ''}
       ${phrase.origin ? `<small>${esc(phrase.origin)}${practice && phrase.study?.adaptation ? ` · ${esc(phrase.study.adaptation)}` : ''}</small>` : ''}
-    </div>
-    <div class="actions phrase-actions">
-      ${practice ? btn('背这句','recallOne:' + phrase.id) : '<button type="button" class="btn" data-copy-phrase>复制</button>'}
-      ${phrase.id ? `<button type="button" class="fav ${isFavorite ? 'on' : ''}" data-fav="${esc(phrase.id)}"
-        aria-label="收藏" aria-pressed="${isFavorite}" title="收藏">${isFavorite ? '★' : '☆'}</button>` : ''}
     </div>
     ${practice ? `<div class="recall-card-controls">
       <label class="recall-check">
@@ -725,7 +725,8 @@ function phraseHTML(phrase) {
           ${STUDY_LEVELS.map(level => `<option value="${level.id}" ${level.id === last ? 'selected' : ''}>${level.label}</option>`).join('')}
         </select>
       </label>
-    </div>` : ''}
+      ${actions}
+    </div>` : actions}
   </article>`;
 }
 
