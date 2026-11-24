@@ -504,14 +504,30 @@ function editEssay(e){let v=ui.variant||'final';dialog(e?'修改作文版本':'�
 function extractSentences(){const e=data.essays.find(x=>x.id===ui.essay);if(!e)return;let sentences=(e[ui.variant]||'').split(/(?<=[.!?])\s+/).map(s=>s.trim()).filter(s=>s.length>22).slice(0,35);dialog('提取句子到背诵库',`<p class="sub">选择想加入背诵库的句子。中文提示可以稍后自行填写。</p><div style="max-height:330px;overflow:auto">${sentences.map((s,i)=>`<label style="display:block;font-size:13px;line-height:1.8;padding:7px;border-bottom:1px solid #eee"><input type="checkbox" class="sentenceCheck" value="${i}"/> ${esc(s)}</label>`).join('')}</div><button class="btn primary" id="addSentences">加入所选句子</button>`);$('#addSentences').onclick=()=>{let ids=[...document.querySelectorAll('.sentenceCheck:checked')].map(e=>+e.value);for(let i of ids)data.phrases.unshift({id:'custom-'+Date.now()+'-'+i,en:sentences[i],zh:'（请补充中文提示）',example:'',category:'高分句',topic:e.topic,origin:e.year+' '+e.title,status:'待审核'});save();$('#dialogHost').innerHTML='';toast(`添加了 ${ids.length} 句`);draw()}}
 $('#importFile').onchange=async e=>{let file=e.target.files[0];if(!file)return;try{let imported=JSON.parse(await file.text());if(!Array.isArray(imported.essays)||!Array.isArray(imported.phrases))throw Error('不是有效的EssayBook数据文件');if(data.essays.length&&!confirm('导入将合并已有内容（同ID的文章使用导入版本），继续吗？'))return;data.essays=[...data.essays.filter(x=>!imported.essays.some(y=>y.id===x.id)),...imported.essays];data.phrases=[...data.phrases.filter(x=>!imported.phrases.some(y=>y.id===x.id)),...imported.phrases];data.favorites=uniq([...(data.favorites||[]),...(imported.favorites||[])]);data.reviews={...(data.reviews||{}),...(imported.reviews||{})};save();toast(`成功导入 ${imported.essays.length} 篇作文、${imported.phrases.length} 条素材`);draw()}catch(err){toast('导入失败：'+err.message)}finally{e.target.value=''}};
 $('#openSettings').onclick=()=>showPage('settings');
+async function getCloudUser() {
+  const { data: result, error } = await db.auth.getUser();
+  if (error?.code === 'bad_jwt' && /token (?:is )?expired/i.test(error.message)) {
+    // The server can reject a token before the browser decides it needs renewing.
+    const refreshed = await db.auth.refreshSession();
+    if (refreshed.error?.name === 'AuthSessionMissingError' ||
+        ['refresh_token_not_found', 'refresh_token_already_used', 'session_not_found', 'session_expired'].includes(refreshed.error?.code)) {
+      throw new Error('登录会话已过期，请用原邮箱重新登录。');
+    }
+    if (refreshed.error) throw refreshed.error;
+    return refreshed.data?.user ?? null;
+  }
+  if (error && error.name !== 'AuthSessionMissingError' && !error.message.includes('Auth session missing')) {
+    throw error;
+  }
+  return result?.user ?? null;
+}
+
 async function initCloud(){
  if(!config.url||!config.key){toast('尚未配置公开连接密钥');return}
  if(!window.supabase){toast('云端SDK未加载，请检查网络并刷新');return}
  try{
   if(!db)db=window.supabase.createClient(config.url,config.key,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});
-  const {data:r,error}=await db.auth.getUser();
-  if(error&&!String(error.message).includes('Auth session missing'))throw error;
-  user=r?.user||null;
+  user=await getCloudUser();
   if(user)await cloudLoad(false);
   db.auth.onAuthStateChange((event,session)=>{
    if(event==='SIGNED_IN'&&session?.user){
@@ -529,8 +545,17 @@ async function initCloud(){
 async function sendMagic(){
  const email=$('#supEmail')?.value.trim();if(!email)return toast('请输入登录邮箱');
  if(!db){await initCloud();if(!db)return}
- try{const {error}=await db.auth.signInWithOtp({email,options:{emailRedirectTo:'https://yuiyuh.github.io/essaybook/'}});if(error)throw error;toast('已发送登录邮件，请检查收件箱')}
- catch(e){toast('发送失败：'+e.message)}
+ try{
+  const {error}=await db.auth.signInWithOtp({email,options:{emailRedirectTo:'https://yuiyuh.github.io/essaybook/'}});
+  if(error)throw error;
+  cloudError='';
+  refreshCloudStatus();
+  toast('已发送登录邮件，请检查收件箱');
+ }catch(e){
+  if(e.code==='over_email_send_rate_limit'){
+   reportCloudError('登录邮件发送受限', new Error('发送次数已达上限，请稍后再试。'));
+  }else reportCloudError('发送失败',e);
+ }
 }
 async function cloudSave(explicit=false){
  if(!db||!user){if(explicit)toast('请先邮箱登录');return}
