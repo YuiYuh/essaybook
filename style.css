@@ -243,6 +243,50 @@ button:focus-visible, summary:focus-visible {
 .recall-today .sectionTitle { font-size: 23px; }
 .recall-today .secondary { margin: 6px 0 0; color: var(--muted); font-size: 14px; line-height: 1.6; }
 .recall-today .btn { min-width: 108px; flex: none; }
+.recall-today-actions { flex: none; }
+.history-page { max-width: 820px; margin: auto; }
+.history-filters, .history-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+.history-filters { margin-bottom: 20px; }
+.history-date {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 14px;
+}
+.history-date input {
+  min-height: 44px;
+  min-width: 128px;
+  padding: 6px 9px;
+  color: var(--ink);
+  background: var(--pane);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  font-size: 16px;
+}
+.history-summary { margin-bottom: 10px; }
+.history-summary p { margin: 0; }
+.history-list {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--pane);
+}
+.history-item { display: flex; justify-content: space-between; align-items: baseline; gap: 6px 20px; padding: 13px 16px; }
+.history-item + .history-item { border-top: 1px solid var(--line); }
+.history-item > div:first-child { min-width: 0; overflow-wrap: anywhere; }
+.history-item strong[lang="en"] { font: 600 17px/1.5 Georgia, serif; }
+.history-item p { margin: 4px 0 0; font-size: 14px; color: var(--muted); line-height: 1.55; }
+.history-item-meta { display: grid; gap: 4px; flex: none; text-align: right; font-size: 13px; color: var(--muted); }
+.history-note { font-size: 13px; line-height: 1.6; color: var(--muted); }
 .recall-category { display: flex; align-items: center; gap: 10px 20px; flex-wrap: wrap; }
 .recall-format { display: flex; min-width: 0; align-items: center; gap: 7px; color: var(--muted); font-size: 13px; }
 .recall-format span { flex: none; }
@@ -307,6 +351,10 @@ button:focus-visible, summary:focus-visible {
 .recall-navigation { justify-content: space-between; padding-top: 9px; border-top: 1px solid var(--line); }
 
 @media (max-width: 680px) {
+  .recall-today { flex-wrap: wrap; }
+  .recall-today-actions { margin-top: -4px; }
+  .history-item { flex-direction: column; padding: 12px; }
+  .history-item-meta { display: flex; gap: 9px; text-align: left; }
   .home-tools { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin-bottom: 23px; }
   .home-tools .btn { min-height: 44px; padding-inline: 8px; text-align: center; }
   .home-tools .btn:last-child { grid-column: 1 / -1; }
@@ -317,7 +365,6 @@ button:focus-visible, summary:focus-visible {
 }
 
 @media (max-width: 360px) {
-  .recall-today { flex-wrap: wrap; }
   .recall-grade .btn { padding-inline: 5px; }
 }
 

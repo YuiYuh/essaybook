@@ -1,11 +1,13 @@
 /* EssayBook: public application shell. Private writing data is never bundled here. */
 const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const NAMES={home:'首页',challenge:'随机默写',essays:'我的作文',sentences:'分类背诵',study:'好句背诵',phrases:'替换表达',favorites:'我的收藏',settings:'设置'};
+const NAMES={home:'首页',history:'背诵记录',challenge:'随机默写',essays:'我的作文',sentences:'分类背诵',study:'好句背诵',phrases:'替换表达',favorites:'我的收藏',settings:'设置'};
 const NAV=[['home','◧'],['essays','▤'],['sentences','✎'],['phrases','⌕'],['favorites','☆']];
 const KEY='essaybook-local-v1',CONFIG='essaybook-cloud-config-v1';
+const LOCAL_OWNER = 'essaybook-local-owner';
 const RECOVERY_PREFIX = 'essaybook-recovery-';
 const blank=()=>({schemaVersion:1,essays:[],phrases:[],favorites:[],reviews:{},collections:[]});
-let data=loadData(), config=loadConfig(), db=null, user=null, synced=false, localDirty=false, lastCloudStamp='';
+let data=loadData(), config=loadConfig(), db=null, user=null, synced=false, localDirty=false;
+let localRevision = 0;
 let cloudError = '';
 let initialCloudPending = Boolean(config.url && config.key);
 const PHRASE_PAGE_SIZE = 40;
@@ -68,7 +70,13 @@ function sameSnapshot(left, right) {
 let saveTimer;
 function save() {
   localDirty = true;
-  saveLocal();
+  localRevision++;
+  try {
+    saveLocal();
+  } catch (error) {
+    reportCloudError('本机保存失败', error);
+    if (!user || !db) throw error;
+  }
   if (!user || !db) return;
   const owner = user.id;
   clearTimeout(saveTimer);
@@ -108,11 +116,11 @@ function btn(label, action, cls = '') {
 function empty(title,desc,action='导入我的学习资料'){return `<div class="empty"><div style="font-size:29px">◌</div><strong>${title}</strong><p>${desc}</p>${btn(action,'import','primary')}</div>`}
 function navBar() {
   const current = ui.page === 'study' ? ui.studyReturn : ui.page === 'challenge' ? 'home' : ui.page;
-  const links = NAV.map(([id, icon]) => `<button type="button" class="navItem${current === id ? ' active' : ''}"
-    data-page="${id}" ${current === id ? 'aria-current="page"' : ''}><span class="glyph" aria-hidden="true">${icon}</span>${NAMES[id]}</button>`);
-  $('#nav').innerHTML = links.slice(0, 3).join('');
-  $('#toolnav').innerHTML = links.slice(3).join('');
-  $('.mobileBottom').innerHTML = links.join('');
+  const link = ([id, icon], active) => `<button type="button" class="navItem${active === id ? ' active' : ''}"
+    data-page="${id}" ${active === id ? 'aria-current="page"' : ''}><span class="glyph" aria-hidden="true">${icon}</span>${NAMES[id]}</button>`;
+  $('#nav').innerHTML = [...NAV.slice(0, 3), ['history', '◷']].map(item => link(item, current)).join('');
+  $('#toolnav').innerHTML = NAV.slice(3).map(item => link(item, current)).join('');
+  $('.mobileBottom').innerHTML = NAV.map(item => link(item, current === 'history' ? 'home' : current)).join('');
   $('#breadcrumbs').textContent = NAMES[ui.page];
   $('#statPill').textContent = `${data.essays.length} 篇作文 · ${data.phrases.length} 条素材`;
   refreshCloudStatus();
@@ -120,7 +128,7 @@ function navBar() {
 function draw() {
   navBar();
   if (ui.page !== 'phrases' || !$('#phraseSearch')) {
-    const render = {home:renderHome,challenge:renderChallenge,essays:renderEssays,sentences:renderSentenceBank,study:renderStudy,phrases:renderPhrases,favorites:renderFavorites,settings:renderSettings};
+    const render = {home:renderHome,history:renderHistory,challenge:renderChallenge,essays:renderEssays,sentences:renderSentenceBank,study:renderStudy,phrases:renderPhrases,favorites:renderFavorites,settings:renderSettings};
     $('#app').innerHTML = render[ui.page]();
     if (ui.page === 'phrases') attachPhraseSearch();
   }
@@ -134,8 +142,9 @@ function essayRow(e){return `<button class="essayItem" data-essay="${esc(e.id)}"
 function renderHome() {
   if (ui.essay) return renderEssayDetail();
   const recent = data.essays.slice().reverse().slice(0, 3);
+  const daily = renderDailyStudy();
   return `<h1 class="pageTitle">学习首页</h1>
-    ${renderDailyStudy()}
+    ${daily || '<div class="actions"><button type="button" class="btn soft" data-page="history">背诵记录 →</button></div>'}
     <div class="home-tools" aria-label="学习工具">
       ${btn('按题型分类背诵', 'sentenceMode')}
       ${btn('随机默写', 'randomChallenge')}
@@ -155,7 +164,7 @@ function renderHome() {
     </section>`;
 }
 function renderEssays(){if(ui.essay)return renderEssayDetail();const list=data.essays.filter(e=>ui.essayFilter==='all'||e.kind===ui.essayFilter);return `${layoutHeader('我的作文','原稿、修改稿与推荐背诵版。')}<div class="toolbar"><div class="seg">${[['all','全部'],['大作文','大作文'],['小作文','小作文']].map(([k,v])=>`<button class="${ui.essayFilter===k?'on':''}" data-essayfilter="${k}">${v}</button>`).join('')}</div>${btn('导入作文数据','import')}${btn('新增作文','addEssay','soft')}</div>${list.length?`<div class="essayGrid">${list.map(e=>`<button class="essayCard" data-essay="${esc(e.id)}"><div><span class="tag">${esc(e.kind)}</span><span class="tag grey">${esc(e.topic)}</span><h3>${esc(e.year)} · ${esc(e.title)}</h3></div><div class="foot"><span>${countWords(e.original)} 词原稿</span><span>查看并背诵 →</span></div></button>`).join('')}</div>`:empty('暂无作文','请先导入作文数据，或者新建一篇。')}`}
-function renderEssayDetail(){const e=data.essays.find(x=>x.id===ui.essay);if(!e){ui.essay=null;return renderEssays()}const source=e[ui.variant]||'';const arr=paras(source);const labels={original:'手写原稿',revised:'AI修改稿',final:'背诵版'};let comparison=ui.comparison?`<div class="compare"><div class="readingBox"><div class="eyebrow">ORIGINAL / 原稿</div><div class="article">${esc(e.original)}</div></div><div class="readingBox"><div class="eyebrow">REVISED / 修改稿</div><div class="article">${esc(e.revised)}</div></div></div>`:'';let article=arr.map((p,i)=>`<div class="readingBlock"><div class="paraHeader"><span class="paraLabel">PARAGRAPH ${String(i+1).padStart(2,'0')}</span>${btn(ui.shown[i]?'隐藏':'显示','togglePara:'+i,'ghost')}</div>${ui.readMode==='cn'?`<div class="cnHint">第 ${i+1} 段 · 根据这一段的观点自行回忆英文，点击下面区域查看原文。</div>`:''}${ui.readMode==='en'||ui.shown[i]?`<p class="article paragraph">${esc(p)}</p>`:`<div class="hiddenText" data-action="togglePara:${i}">英文已隐藏 · 点击展开核对</div>`}</div>`).join('');return `<button class="btn ghost" data-action="backEssays">← 返回作文库</button><div class="eyebrow" style="margin-top:20px">${esc(e.year)} / ${esc(e.kind)}</div><h1 class="pageTitle">${esc(e.title)}</h1><p class="sub">${esc(e.note||'')} · ${countWords(source)} 词</p><div class="toolbar"><div class="seg">${[['original','原稿'],['revised','AI修改'],['final','背诵版']].map(([k,v])=>`<button class="${ui.variant===k?'on':''}" data-variant="${k}">${v}</button>`).join('')}</div>${btn(ui.comparison?'退出对照':'左右对照','compare')}${btn('编辑当前版本','editEssay')}${btn('添加到句子库','extractSentences','soft')}</div>${ui.comparison?comparison:`<div class="toolbar"><div class="seg">${[['en','全文显示'],['cn','隐藏英文']].map(([k,v])=>`<button class="${ui.readMode===k?'on':''}" data-readmode="${k}">${v}</button>`).join('')}</div>${btn('全部显示','showAll')}${btn('全部隐藏','hideAll')}</div><div class="readingBox">${article}</div>`}`}
+function renderEssayDetail(){const e=data.essays.find(x=>x.id===ui.essay);if(!e){ui.essay=null;return renderEssays()}const source=e[ui.variant]||'';const arr=paras(source);const labels={original:'手写原稿',revised:'AI修改稿',final:'背诵版'};let comparison=ui.comparison?`<div class="compare"><div class="readingBox"><div class="eyebrow">ORIGINAL / 原稿</div><div class="article">${esc(e.original)}</div></div><div class="readingBox"><div class="eyebrow">REVISED / 修改稿</div><div class="article">${esc(e.revised)}</div></div></div>`:'';let article=arr.map((p,i)=>`<div class="readingBlock"><div class="paraHeader"><span class="paraLabel">PARAGRAPH ${String(i+1).padStart(2,'0')}</span>${btn(ui.shown[i]?'隐藏':'显示','togglePara:'+i,'ghost')}</div>${ui.readMode==='cn'?`<div class="cnHint">第 ${i+1} 段 · 根据这一段的观点自行回忆英文，点击下面区域查看原文。</div>`:''}${ui.readMode==='en'||ui.shown[i]?`<p class="article paragraph">${esc(p)}</p>`:`<div class="hiddenText" data-action="togglePara:${i}">英文已隐藏 · 点击展开核对</div>`}</div>`).join('');return `<button class="btn ghost" data-action="backEssays">← 返回作文库</button><div class="eyebrow" style="margin-top:20px">${esc(e.year)} / ${esc(e.kind)}</div><h1 class="pageTitle">${esc(e.title)}</h1><p class="sub">${esc(e.note||'')} · ${countWords(source)} 词</p><div class="toolbar"><div class="seg">${[['original','原稿'],['revised','AI修改'],['final','背诵版']].map(([k,v])=>`<button class="${ui.variant===k?'on':''}" data-variant="${k}">${v}</button>`).join('')}</div>${btn(ui.comparison?'退出对照':'左右对照','compare')}${btn('编辑当前版本','editEssay')}${btn('添加到句子库','extractSentences','soft')}</div>${ui.comparison?comparison:`<div class="toolbar"><div class="seg">${[['en','全文显示'],['cn','隐藏英文']].map(([k,v])=>`<button class="${ui.readMode===k?'on':''}" data-readmode="${k}">${v}</button>`).join('')}</div>${btn('全部显示','showAll')}${btn('全部隐藏','hideAll')}${source.trim() ? btn('记录整篇背诵', 'recordEssay', 'soft') : ''}</div><div class="readingBox">${article}</div>`}`}
 function normalizeSearch(value) {
   return String(value ?? '').normalize('NFKC').toLowerCase().replace(/[‘’]/g, "'").replace(/\s+/g, ' ').trim();
 }
@@ -208,6 +217,198 @@ const STUDY_LEVELS = [
   {id:'familiar', label:'有点熟', interval:STUDY_DAY},
   {id:'known', label:'熟练', interval:3 * STUDY_DAY},
 ];
+const STUDY_LEVEL_LABELS = new Map(STUDY_LEVELS.map(({id, label}) => [id, label]));
+const ESSAY_VERSIONS = {original:'原稿', revised:'AI 修改稿', final:'背诵版'};
+const HISTORY_FILTERS = ['今天', '昨天', '前天', '累计'];
+const HISTORY_PAGE_SIZE = 30;
+const historyDateFormat = new Intl.DateTimeFormat('zh-CN', {year:'numeric', month:'numeric', day:'numeric'});
+const historyTimeFormat = new Intl.DateTimeFormat('zh-CN', {hour:'2-digit', minute:'2-digit', hourCycle:'h23'});
+let historyFilter = '0', historyDate = '', historyLimit = HISTORY_PAGE_SIZE;
+
+function practiceLog(snapshot) {
+  const log = snapshot.practiceLog;
+  return log && typeof log === 'object' && !Array.isArray(log) ? log : {};
+}
+
+function isPracticeEntry(entry) {
+  return Array.isArray(entry) && typeof entry[0] === 'string' && typeof entry[1] === 'string' &&
+    Number.isFinite(Date.parse(entry[1])) &&
+    (STUDY_LEVEL_LABELS.has(entry[2]) || entry[2] === 'essay' || entry[2] === 'legacy');
+}
+
+function datedPractice(snapshot) {
+  const events = Object.entries(practiceLog(snapshot)).filter(([, entry]) => isPracticeEntry(entry));
+  const dated = new Set(events.filter(([, entry]) => entry[2] !== 'essay')
+    .map(([, [id, at]]) => JSON.stringify([id, Date.parse(at)])));
+  for (const [id, review] of Object.entries(snapshot.reviews || {})) {
+    const at = Date.parse(review?.at);
+    const key = JSON.stringify([id, at]);
+    if (Number.isFinite(at) && !dated.has(key)) {
+      events.push(['legacy:' + key, [id, new Date(at).toISOString(), 'legacy', review.last || '']]);
+    }
+  }
+  return Object.fromEntries(events);
+}
+
+function gradeCounts(log) {
+  const counts = new Map();
+  for (const [id, , grade] of Object.values(log)) {
+    if (!STUDY_LEVEL_LABELS.has(grade)) continue;
+    if (!counts.has(id)) counts.set(id, {});
+    const byGrade = counts.get(id);
+    byGrade[grade] = (byGrade[grade] || 0) + 1;
+  }
+  return counts;
+}
+
+function reviewCount(value) {
+  return Number.isSafeInteger(value) && value > 0 ? value : 0;
+}
+
+function mergePractice(first, second) {
+  const firstLog = datedPractice(first);
+  const secondLog = datedPractice(second);
+  const combinedLog = {...firstLog, ...secondLog};
+  // Historical timestamps can also arrive from a backup that predates the event log.
+  // When both sources contain the same practice, keep its precise event only.
+  for (const [id, at, grade] of Object.values(combinedLog)) {
+    if (STUDY_LEVEL_LABELS.has(grade)) delete combinedLog['legacy:' + JSON.stringify([id, Date.parse(at)])];
+  }
+  const firstCounts = gradeCounts(firstLog);
+  const secondCounts = gradeCounts(secondLog);
+  const counts = gradeCounts(combinedLog);
+  const ids = new Set([...Object.keys(first.reviews || {}), ...Object.keys(second.reviews || {}), ...counts.keys()]);
+  const reviews = Object.fromEntries([...ids].map(id => {
+    const left = Object.hasOwn(first.reviews || {}, id) ? first.reviews[id] : {};
+    const right = Object.hasOwn(second.reviews || {}, id) ? second.reviews[id] : {};
+    const latest = Date.parse(left?.at) > (Date.parse(right?.at) || -Infinity) ? left : right;
+    const review = {...left, ...right, ...latest};
+    for (const grade of STUDY_LEVEL_LABELS.keys()) {
+      const legacy = Math.max(0,
+        reviewCount(left?.[grade]) - (firstCounts.get(id)?.[grade] || 0),
+        reviewCount(right?.[grade]) - (secondCounts.get(id)?.[grade] || 0));
+      const total = legacy + (counts.get(id)?.[grade] || 0);
+      if (total || Object.hasOwn(review, grade)) review[grade] = total;
+    }
+    return [id, review];
+  }));
+  return Object.keys(combinedLog).length ? {reviews, practiceLog:combinedLog} : {reviews};
+}
+
+function addPractice(id, at, grade, detail) {
+  const random = crypto.getRandomValues(new Uint32Array(3));
+  const key = Array.from(random, part => part.toString(36)).join('-');
+  const entry = detail ? [id, at, grade, detail] : [id, at, grade];
+  data.practiceLog = {...practiceLog(data), [key]:entry};
+}
+
+function localPracticeDate(date) {
+  return [date.getFullYear(), date.getMonth() + 1, date.getDate()]
+    .map(part => String(part).padStart(2, '0')).join('-');
+}
+
+function dateDaysAgo(days) {
+  const date = new Date();
+  date.setDate(date.getDate() - days);
+  return localPracticeDate(date);
+}
+
+function getHistory(day) {
+  const items = new Map();
+  const preciseCounts = new Map();
+  for (const [id, at, grade, detail] of Object.values(datedPractice(data))) {
+    const essay = grade === 'essay';
+    if (!essay && grade !== 'legacy') preciseCounts.set(id, (preciseCounts.get(id) || 0) + 1);
+    if (day && localPracticeDate(new Date(at)) !== day) continue;
+    const key = JSON.stringify([essay, id]);
+    const item = items.get(key) || {id, essay, count:0, at:'', grade:'', detail:'', legacy:false};
+    item.count++;
+    item.legacy ||= grade === 'legacy';
+    if (Date.parse(at) > (Date.parse(item.at) || -Infinity)) {
+      Object.assign(item, {at, grade, detail});
+    }
+    items.set(key, item);
+  }
+  let hasLegacy = false;
+  for (const [id, review] of Object.entries(data.reviews || {})) {
+    const total = [...STUDY_LEVEL_LABELS.keys()].reduce((sum, grade) => sum + reviewCount(review?.[grade]), 0);
+    const key = JSON.stringify([false, id]);
+    const item = items.get(key);
+    const legacy = total > (preciseCounts.get(id) || 0);
+    hasLegacy ||= legacy;
+    if (!day && total) {
+      items.set(key, {...(item || {id, essay:false, at:'', grade:review?.last}), count:Math.max(total, item?.count || 0), legacy:legacy || item?.legacy});
+    }
+  }
+  const rows = [...items.values()].sort((a, b) => (Date.parse(b.at) || 0) - (Date.parse(a.at) || 0));
+  return {rows, hasLegacy:hasLegacy || rows.some(item => item.legacy)};
+}
+
+function renderHistory() {
+  const all = historyFilter === '3';
+  const day = all ? '' : historyFilter === 'date' ? historyDate : dateDaysAgo(Number(historyFilter));
+  const {rows, hasLegacy} = getHistory(day);
+  const phrases = new Map(data.phrases.map(phrase => [phrase?.id, phrase]));
+  const essays = new Map(data.essays.map(essay => [essay?.id, essay]));
+  const sentences = rows.filter(row => !row.essay);
+  const essayCount = rows.length - sentences.length;
+  const essayAttempts = rows.reduce((sum, row) => row.essay ? sum + row.count : sum, 0);
+  const sentenceAttempts = sentences.reduce((sum, row) => sum + row.count, 0);
+  const heading = all ? '累计背诵' : historyDateFormat.format(new Date(day + 'T12:00:00'));
+  return `<div class="history-page">
+    <h1 class="pageTitle">背诵记录</h1>
+    <div class="history-filters">
+      <div class="actions recall-filters" role="group" aria-label="背诵日期范围">
+        ${HISTORY_FILTERS.map((label, i) => `<button type="button" class="btn recall-filter"
+          data-action="historyFilter:${i}" aria-pressed="${String(i) === historyFilter}">${label}</button>`).join('')}
+      </div>
+      <label class="history-date">选择日期
+        <input type="date" id="historyDate" max="${dateDaysAgo(0)}" value="${esc(historyFilter === 'date' ? historyDate : '')}">
+      </label>
+    </div>
+    <section aria-labelledby="history-heading">
+      <div class="history-summary">
+        <h2 class="sectionTitle" id="history-heading">${heading}</h2>
+        <p class="counter">${sentences.length} 句 · ${sentenceAttempts} 次练句${essayCount ? ` · ${essayCount} 篇作文、${essayAttempts} 次整篇背诵` : ''}</p>
+      </div>
+      ${rows.length ? `<ul class="history-list" aria-label="背过的内容">
+        ${rows.slice(0, historyLimit).map(row => {
+          const phrase = phrases.get(row.id);
+          const essay = essays.get(row.id);
+          const version = Object.hasOwn(ESSAY_VERSIONS, row.detail) ? ESSAY_VERSIONS[row.detail] : '';
+          const level = row.essay ? version : STUDY_LEVEL_LABELS.get(row.grade === 'legacy' ? row.detail : row.grade);
+          const time = row.at ? (all ? historyDateFormat : historyTimeFormat).format(new Date(row.at)) : '日期未记录';
+          return `<li class="history-item">
+            <div>
+              <strong ${row.essay ? '' : 'lang="en"'}>${esc(row.essay ? essay?.title || '作文已不在档案中' : phrase?.en || '原句已不在句库')}</strong>
+              ${!row.essay && phrase?.zh ? `<p>${esc(phrase.zh)}</p>` : ''}
+            </div>
+            <div class="history-item-meta"><span>${row.count} 次${level ? ` · ${level}` : ''}</span>
+              ${row.at ? `<time datetime="${esc(row.at)}">${time}</time>` : `<span>${time}</span>`}
+            </div>
+          </li>`;
+        }).join('')}
+      </ul>` : empty(all ? '还没有背诵记录' : '这天没有背诵记录', '背完句子标记熟练度，或在作文页记录整篇背诵。')}
+      ${rows.length > historyLimit ? btn(`再显示 ${Math.min(HISTORY_PAGE_SIZE, rows.length - historyLimit)} 条`, 'historyMore') : ''}
+      ${hasLegacy ? '<p class="history-note">旧记录保留了累计次数和最近一次日期，更早的练习可能没有日期。</p>' : ''}
+    </section>
+  </div>`;
+}
+
+function setHistoryFilter(filter) {
+  historyFilter = filter;
+  historyLimit = HISTORY_PAGE_SIZE;
+  draw();
+}
+
+function recordEssayPractice() {
+  const essay = data.essays.find(item => item.id === ui.essay);
+  if (typeof essay?.[ui.variant] !== 'string' || !essay[ui.variant].trim()) return toast('当前版本还没有正文');
+  addPractice(essay.id, new Date().toISOString(), 'essay', ui.variant);
+  save();
+  toast('已记下这次整篇背诵');
+}
+
 const REVIEW_ROUND_SIZE = 12;
 const NEW_ROUND_SIZE = 6;
 
@@ -243,7 +444,10 @@ function renderDailyStudy(compact = false) {
   if (compact) return size ? btn(label, 'dailyStudy', 'soft') : '';
   return `<section class="recall-today" aria-labelledby="daily-study-heading">
     <div><h2 class="sectionTitle" id="daily-study-heading">今日复习</h2><p class="secondary">${message}</p></div>
-    ${size ? btn(label, 'dailyStudy', 'primary') : ''}
+    <div class="actions recall-today-actions">
+      ${size ? btn(label, 'dailyStudy', 'primary') : ''}
+      <button type="button" class="btn ghost" data-page="history">背诵记录 →</button>
+    </div>
   </section>`;
 }
 
@@ -566,8 +770,15 @@ $('#app').addEventListener('click', event => {
 });
 
 $('#app').addEventListener('change', event => {
-  if (ui.page !== 'sentences') return;
   const control = event.target;
+  if (control.id === 'historyDate' && ui.page === 'history') {
+    if (control.value && !control.validity.valid) return;
+    historyDate = control.value;
+    setHistoryFilter(historyDate ? 'date' : '0');
+    $('#historyDate').focus({preventScroll:true});
+    return;
+  }
+  if (ui.page !== 'sentences') return;
   if (control.id === 'recallFormatPicker') {
     handleRecallAction('recallFormat:' + control.value);
   } else if (control.matches('[data-recall-select]')) {
@@ -619,6 +830,7 @@ function renderStudySummary(cards) {
       <div class="actions">
         ${remaining ? btn(`重练未熟的 ${remaining} 句`, 'retryStudy', 'primary') : ''}
         ${btn(ui.studyReturn === 'home' ? '返回首页' : `返回${NAMES[ui.studyReturn]}`, 'endStudy')}
+        ${btn('查看背诵记录', 'historyToday', 'ghost')}
       </div>
     </div>`;
 }
@@ -755,7 +967,14 @@ function handleRecallAction(action) {
   }
   if (command === 'recallAll') startCategoryStudy(bank.cards, bank);
 }
-function act(action){if(action.startsWith('recall'))return handleRecallAction(action);if(action.startsWith('togglePara:')){let i=+action.split(':')[1];ui.shown[i]=!ui.shown[i];draw();return}if(action.startsWith('mark:'))return gradeStudy(action.slice(5));switch(action){
+function act(action){if(action.startsWith('recall'))return handleRecallAction(action);if(action.startsWith('togglePara:')){let i=+action.split(':')[1];ui.shown[i]=!ui.shown[i];draw();return}if(action.startsWith('mark:'))return gradeStudy(action.slice(5));if(action.startsWith('historyFilter:')){
+  setHistoryFilter(action.slice('historyFilter:'.length));
+  $(`[data-action="${CSS.escape(action)}"]`)?.focus({preventScroll:true});
+  return;
+}switch(action){
+ case 'historyToday': historyFilter='0'; historyLimit=HISTORY_PAGE_SIZE; showPage('history'); break;
+ case 'historyMore': historyLimit+=HISTORY_PAGE_SIZE; draw(); break;
+ case 'recordEssay': recordEssayPractice(); break;
  case 'randomChallenge': startChallenge(); break;
  case 'endChallenge': ui.essay=null; showPage('home'); break;
  case 'revealChallenge': if(!ui.challenge)break; ui.challenge.revealed=true; draw(); $('#challenge-answer')?.focus({preventScroll:true}); break;
@@ -768,8 +987,11 @@ function act(action){if(action.startsWith('recall'))return handleRecallAction(ac
  case 'studyFavorites': startStudy(data.phrases.filter(p => isSentenceMaterial(p) && data.favorites.includes(p.id)).map(p => p.id)); break;
  case 'import':$('#importFile').click();break;case 'export':downloadJSON(data,'essaybook-backup-'+new Date().toISOString().slice(0,10)+'.json');break;case 'chooseEssay':ui.essay=null;showPage('essays');break;case 'chatgpt':window.open('https://chatgpt.com','_blank','noopener');break;case 'backEssays':ui.essay=null;showPage('essays');break;case 'toPhrases':showPage('phrases');break;case 'compare':ui.comparison=!ui.comparison;draw();break;case 'showAll':paras(data.essays.find(x=>x.id===ui.essay)?.[ui.variant]).forEach((_,i)=>ui.shown[i]=true);draw();break;case 'hideAll':ui.shown={};ui.readMode='cn';draw();break;case 'reveal':ui.reveal=true;draw();$('.recall-panel .answer')?.focus({preventScroll:true});break;case 'prev':moveStudy(-1);break;case 'next':moveStudy(1);break;case 'endStudy':showPage(ui.studyReturn);break;case 'addEssay':editEssay(null);break;case 'editEssay':editEssay(data.essays.find(e=>e.id===ui.essay));break;case 'extractSentences':extractSentences();break;case 'connectCloud':initCloud();break;case 'sendMagic':sendMagic();break;case 'signOut':signOut();break;case 'uploadCloud':cloudSave(true);break;case 'downloadCloud':cloudLoad(true);break}}
 function recordReview(id, last) {
-  const old = data.reviews[id] || { known: 0, again: 0 };
-  data.reviews[id] = { ...old, [last]: (old[last] || 0) + 1, last, at: new Date().toISOString() };
+  const old = Object.hasOwn(data.reviews, id) ? data.reviews[id] : { known: 0, again: 0 };
+  const at = new Date().toISOString();
+  data.practiceLog = datedPractice(data);
+  addPractice(id, at, last);
+  data.reviews = {...data.reviews, [id]:{...old, [last]:reviewCount(old?.[last]) + 1, last, at}};
   save();
 }
 
@@ -903,7 +1125,7 @@ function downloadJSON(obj,name){let blob=new Blob([JSON.stringify(obj,null,2)],{
 function dialog(title,body){$('#dialogHost').innerHTML=`<div class="dialogShade"><div class="dialog"><h2>${title}</h2>${body}<div class="actions">${btn('关闭','closeDialog')}</div></div></div>`;document.querySelector('#dialogHost [data-action="closeDialog"]').onclick=()=>$('#dialogHost').innerHTML=''}
 function editEssay(e){let v=ui.variant||'final';dialog(e?'修改作文版本':'新增作文',`<div class="field"><label>标题</label><input id="editTitle" value="${esc(e?.title||'')}" /></div><div class="field"><label>年份</label><input id="editYear" value="${esc(e?.year||'')}" placeholder="2026" /></div><div class="field"><label>作文类型</label><select class="select" id="editKind"><option ${e?.kind==='大作文'?'selected':''}>大作文</option><option ${e?.kind==='小作文'?'selected':''}>小作文</option></select></div><div class="field"><label>${e?`编辑 ${v}（原稿不受其他版本修改影响）`:'作文原稿'}</label><textarea id="editBody" style="min-height:250px">${esc(e?.[v]||'')}</textarea></div><button class="btn primary" id="saveEssay">保存为当前版本</button>`);$('#saveEssay').onclick=()=>{let t=$('#editTitle').value.trim(),body=$('#editBody').value.trim();if(!t||!body)return toast('标题和正文不能为空');if(e){e[v]=body;e.title=t;e.year=$('#editYear').value.trim();e.kind=$('#editKind').value}else{let id='essay-user-'+Date.now();data.essays.push({id,title:t,year:$('#editYear').value.trim(),kind:$('#editKind').value,topic:'自选',original:body,revised:'',final:body,finalReviewed:false,note:'个人新增作文'})}save();$('#dialogHost').innerHTML='';toast('已保存');draw()}}
 function extractSentences(){const e=data.essays.find(x=>x.id===ui.essay);if(!e)return;let sentences=(e[ui.variant]||'').split(/(?<=[.!?])\s+/).map(s=>s.trim()).filter(s=>s.length>22).slice(0,35);dialog('提取句子到背诵库',`<p class="sub">选择想加入背诵库的句子。中文提示可以稍后自行填写。</p><div style="max-height:330px;overflow:auto">${sentences.map((s,i)=>`<label style="display:block;font-size:13px;line-height:1.8;padding:7px;border-bottom:1px solid #eee"><input type="checkbox" class="sentenceCheck" value="${i}"/> ${esc(s)}</label>`).join('')}</div><button class="btn primary" id="addSentences">加入所选句子</button>`);$('#addSentences').onclick=()=>{let ids=[...document.querySelectorAll('.sentenceCheck:checked')].map(e=>+e.value);for(let i of ids)data.phrases.unshift({id:'custom-'+Date.now()+'-'+i,en:sentences[i],zh:'（请补充中文提示）',example:'',category:'高分句',topic:e.topic,origin:e.year+' '+e.title,status:'待审核'});save();$('#dialogHost').innerHTML='';toast(`添加了 ${ids.length} 句`);draw()}}
-$('#importFile').onchange=async e=>{let file=e.target.files[0];if(!file)return;try{let imported=JSON.parse(await file.text());if(!Array.isArray(imported.essays)||!Array.isArray(imported.phrases))throw Error('不是有效的EssayBook数据文件');if(data.essays.length&&!confirm('导入将合并已有内容（同ID的文章使用导入版本），继续吗？'))return;data.essays=[...data.essays.filter(x=>!imported.essays.some(y=>y.id===x.id)),...imported.essays];data.phrases=[...data.phrases.filter(x=>!imported.phrases.some(y=>y.id===x.id)),...imported.phrases];data.favorites=uniq([...(data.favorites||[]),...(imported.favorites||[])]);data.reviews={...(data.reviews||{}),...(imported.reviews||{})};save();toast(`成功导入 ${imported.essays.length} 篇作文、${imported.phrases.length} 条素材`);draw()}catch(err){toast('导入失败：'+err.message)}finally{e.target.value=''}};
+$('#importFile').onchange=async e=>{let file=e.target.files[0];if(!file)return;try{let imported=JSON.parse(await file.text());if(!Array.isArray(imported.essays)||!Array.isArray(imported.phrases))throw Error('不是有效的EssayBook数据文件');if(data.essays.length&&!confirm('导入将合并已有内容（同ID的文章使用导入版本），继续吗？'))return;data.essays=[...data.essays.filter(x=>!imported.essays.some(y=>y.id===x.id)),...imported.essays];data.phrases=[...data.phrases.filter(x=>!imported.phrases.some(y=>y.id===x.id)),...imported.phrases];data.favorites=uniq([...(data.favorites||[]),...(imported.favorites||[])]);Object.assign(data, mergePractice(data, imported));save();toast(`成功导入 ${imported.essays.length} 篇作文、${imported.phrases.length} 条素材`);draw()}catch(err){toast('导入失败：'+err.message)}finally{e.target.value=''}};
 $('#openSettings').onclick=()=>showPage('settings');
 async function getCloudUser() {
   const { data: result, error } = await db.auth.getUser();
@@ -958,33 +1180,113 @@ async function sendMagic(){
   }else reportCloudError('发送失败',e);
  }
 }
-async function cloudSave(explicit=false){
- if(!db||!user){if(explicit)toast('请先邮箱登录');return}
- try{
-  const stamp=new Date().toISOString();
-  const {error}=await db.from('essaybook_data').upsert({owner:user.id,payload:data,updated_at:stamp},{onConflict:'owner'});
-  if(error)throw error;lastCloudStamp=stamp;localDirty=false;synced=true;cloudError='';
-  if(explicit)toast('✓ 云端同步成功');navBar();
- }catch(e){reportCloudError('云端保存失败',e)}
+function cachedOwner() {
+  try { return localStorage.getItem(LOCAL_OWNER); } catch { return null; }
+}
+
+function cacheOwner(owner) {
+  try { localStorage.setItem(LOCAL_OWNER, owner); } catch { /* The snapshot can still be used locally. */ }
+}
+
+function cloudRow(owner) {
+  return db.from('essaybook_data').select('payload,updated_at').eq('owner', owner).maybeSingle();
+}
+
+let cloudWrites = Promise.resolve();
+function cloudSave(explicit = false) {
+  if (!db || !user) {
+    if (explicit) toast('请先邮箱登录');
+    return;
+  }
+  const owner = user.id;
+  cloudWrites = cloudWrites.then(() => writeCloudSnapshot(owner, explicit));
+  return cloudWrites;
+}
+
+async function writeCloudSnapshot(owner, explicit) {
+  try {
+    if (user?.id !== owner) return;
+    const previousOwner = cachedOwner();
+    if (previousOwner && previousOwner !== owner) throw new Error('请先加载当前账号的云端资料');
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const {data:remote, error:readError} = await cloudRow(owner);
+      if (user?.id !== owner) return;
+      if (readError) throw readError;
+      const revision = localRevision;
+      const snapshot = {...data};
+      if (remote?.payload && (snapshot.practiceLog || remote.payload.practiceLog)) {
+        Object.assign(snapshot, mergePractice(remote.payload, snapshot));
+      }
+      const previousStamp = Date.parse(remote?.updated_at);
+      const stamp = new Date(Math.max(Date.now(), Number.isFinite(previousStamp) ? previousStamp + 1 : 0)).toISOString();
+      const table = db.from('essaybook_data');
+      let write;
+      if (remote) {
+        // A second device may have saved after the read. Only replace the version we merged.
+        const update = table.update({payload:snapshot, updated_at:stamp}).eq('owner', owner);
+        write = remote.updated_at ? update.eq('updated_at', remote.updated_at) : update.is('updated_at', null);
+      } else {
+        write = table.upsert({owner, payload:snapshot, updated_at:stamp}, {onConflict:'owner', ignoreDuplicates:true});
+      }
+      const {data:saved, error:writeError} = await write.select('updated_at').maybeSingle();
+      if (user?.id !== owner) return;
+      if (writeError) throw writeError;
+      if (!saved) continue;
+      if (revision !== localRevision) return;
+      const changed = !sameSnapshot(snapshot, data);
+      if (changed) {
+        saveLocal(snapshot);
+        data = snapshot;
+      }
+      cacheOwner(owner);
+      localDirty = false;
+      synced = true;
+      cloudError = '';
+      if (changed && ui.page === 'history') draw();
+      else refreshCloudStatus();
+      if (explicit) toast('✓ 云端同步成功');
+      return;
+    }
+    throw new Error('另一台设备正在同步，请稍后重试');
+  } catch (error) {
+    if (user?.id === owner) reportCloudError('云端保存失败', error);
+  }
 }
 async function cloudLoad(explicit=false){
  if(!db||!user)return;
  const owner = user.id;
  try{
-  const {data:r,error}=await db.from('essaybook_data').select('payload,updated_at').eq('owner',owner).maybeSingle();
+  const {data:r,error}=await cloudRow(owner);
   if(user?.id!==owner)return;
   if(error)throw error;
   if(r?.payload&&Array.isArray(r.payload.essays)){
-   if(localDirty&&!explicit){toast('本地有未同步修改，暂不覆盖');return}
+   const previousOwner = cachedOwner();
+   if(localDirty&&!explicit&&(!previousOwner||previousOwner===owner)){
+    if(previousOwner===owner)await cloudSave();
+    else toast('本地有未同步修改，暂不覆盖');
+    return;
+   }
    const incoming = {...blank(),...r.payload};
+   let uploadPractice = false;
+   if (previousOwner === owner && data.practiceLog && !sameSnapshot(incoming.practiceLog, data.practiceLog)) {
+    const merged = mergePractice(incoming, data);
+    uploadPractice = !sameSnapshot(incoming.practiceLog, merged.practiceLog);
+    Object.assign(incoming, merged);
+   }
    if (!sameSnapshot(data, incoming)) {
-    if (!sameSnapshot(data, blank())) saveRecoveryCopy(data);
+    const onlyPracticeChanged = previousOwner === owner &&
+      (data.practiceLog || sameSnapshot(data.reviews, incoming.reviews)) &&
+      sameSnapshot({...data, reviews:null, practiceLog:null}, {...incoming, reviews:null, practiceLog:null});
+    if (!onlyPracticeChanged && !sameSnapshot(data, blank())) saveRecoveryCopy(data);
     saveLocal(incoming);
     data = incoming;
    }
-   lastCloudStamp=r.updated_at||'';localDirty=false;synced=true;cloudError='';draw();
+   cacheOwner(owner);
+   localRevision++;
+   localDirty=uploadPractice;synced=true;cloudError='';draw();
+   if(uploadPractice)await cloudSave();
    if(explicit)toast('✓ 已加载云端资料');
-  }else if(data.essays.length){await cloudSave(true)}
+  }else if(data.essays.length || data.practiceLog){await cloudSave(true)}
   else{synced=true;cloudError='';draw()}
  }catch(e){if(user?.id===owner)reportCloudError('同步失败',e)}
 }
@@ -992,5 +1294,6 @@ async function signOut(){if(db)await db.auth.signOut();clearChallenge();clearStu
 if(initialCloudPending)window.addEventListener('load',async()=>{
  try{await initCloud()}finally{initialCloudPending=false}
 });
-document.addEventListener('visibilitychange',()=>{if(!document.hidden&&db&&user&&!localDirty)cloudLoad(false)});
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&db&&user)cloudLoad(false)});
+window.addEventListener('online',()=>{if(db&&user&&localDirty)cloudSave()});
 draw();
