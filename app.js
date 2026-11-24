@@ -1,7 +1,7 @@
 /* EssayBook: public application shell. Private writing data is never bundled here. */
 const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const NAMES={home:'首页',history:'背诵记录',challenge:'随机默写',essays:'我的作文',sentences:'分类背诵',study:'好句背诵',phrases:'替换表达',favorites:'我的收藏',settings:'设置'};
-const NAV=[['home','◧'],['essays','▤'],['sentences','✎'],['phrases','⌕'],['favorites','☆']];
+const NAV=['home','essays','sentences','phrases','favorites'];
 const KEY='essaybook-local-v1',CONFIG='essaybook-cloud-config-v1';
 const LOCAL_OWNER = 'essaybook-local-owner';
 const RECOVERY_PREFIX = 'essaybook-recovery-';
@@ -116,9 +116,9 @@ function btn(label, action, cls = '') {
 function empty(title,desc,action='导入我的学习资料'){return `<div class="empty"><div style="font-size:29px">◌</div><strong>${title}</strong><p>${desc}</p>${btn(action,'import','primary')}</div>`}
 function navBar() {
   const current = ui.page === 'study' ? ui.studyReturn : ui.page === 'challenge' ? 'home' : ui.page;
-  const link = ([id, icon], active) => `<button type="button" class="navItem${active === id ? ' active' : ''}"
-    data-page="${id}" ${active === id ? 'aria-current="page"' : ''}><span class="glyph" aria-hidden="true">${icon}</span>${NAMES[id]}</button>`;
-  $('#nav').innerHTML = [...NAV.slice(0, 3), ['history', '◷']].map(item => link(item, current)).join('');
+  const link = (id, active) => `<button type="button" class="navItem${active === id ? ' active' : ''}"
+    data-page="${id}" ${active === id ? 'aria-current="page"' : ''}>${NAMES[id]}</button>`;
+  $('#nav').innerHTML = [...NAV.slice(0, 3), 'history'].map(item => link(item, current)).join('');
   $('#toolnav').innerHTML = NAV.slice(3).map(item => link(item, current)).join('');
   $('.mobileBottom').innerHTML = NAV.map(item => link(item, current === 'history' ? 'home' : current)).join('');
   $('#breadcrumbs').textContent = NAMES[ui.page];
@@ -138,17 +138,24 @@ function draw() {
 function layoutHeader(title, subtitle) {
   return `<h1 class="pageTitle">${title}</h1><p class="sub">${subtitle}</p>`;
 }
-function essayRow(e){return `<button class="essayItem" data-essay="${esc(e.id)}"><div class="fileIcon">▤</div><div class="details"><b>${esc(e.year)} · ${esc(e.title)}</b><small>${esc(e.kind)}　/　${esc(e.topic)}</small></div><span class="arrow">→</span></button>`}
+function essayRow(essay) {
+  return `<button type="button" class="essayItem" data-essay="${esc(essay.id)}">
+    <span class="essay-year">${esc(essay.year)}</span>
+    <span class="details"><b>${esc(essay.title)}</b><small>${esc(essay.kind)} · ${esc(essay.topic)}</small></span>
+    <span class="arrow" aria-hidden="true">→</span>
+  </button>`;
+}
 function renderHome() {
   if (ui.essay) return renderEssayDetail();
   const recent = data.essays.slice().reverse().slice(0, 3);
-  const daily = renderDailyStudy();
-  return `<h1 class="pageTitle">学习首页</h1>
-    ${daily || '<div class="actions"><button type="button" class="btn soft" data-page="history">背诵记录 →</button></div>'}
-    <div class="home-tools" aria-label="学习工具">
-      ${btn('按题型分类背诵', 'sentenceMode')}
-      ${btn('随机默写', 'randomChallenge')}
-      ${btn('按中文查替换表达 →', 'toPhrases')}
+  return `<div class="home-page">
+    <h1 class="pageTitle">学习首页</h1>
+    ${renderDailyStudy()}
+    <div class="home-tools" role="group" aria-label="学习工具">
+      ${btn('按题型分类背诵 <span aria-hidden="true">→</span>', 'sentenceMode', 'ghost')}
+      ${btn('随机默写 <span aria-hidden="true">→</span>', 'randomChallenge', 'ghost')}
+      ${btn('按中文查替换表达 <span>→</span>', 'toPhrases', 'ghost')}
+      <button type="button" class="btn ghost" data-page="history">背诵记录 <span>→</span></button>
     </div>
     <section class="home-archive" aria-labelledby="home-essays">
       <div class="panelTitle">
@@ -161,7 +168,7 @@ function renderHome() {
         ${btn('整篇背诵 →', 'chooseEssay', 'ghost')}
         ${btn('打开 ChatGPT ↗', 'chatgpt', 'ghost')}
       </div>
-    </section>`;
+    </section></div>`;
 }
 function renderEssays(){if(ui.essay)return renderEssayDetail();const list=data.essays.filter(e=>ui.essayFilter==='all'||e.kind===ui.essayFilter);return `${layoutHeader('我的作文','原稿、修改稿与推荐背诵版。')}<div class="toolbar"><div class="seg">${[['all','全部'],['大作文','大作文'],['小作文','小作文']].map(([k,v])=>`<button class="${ui.essayFilter===k?'on':''}" data-essayfilter="${k}">${v}</button>`).join('')}</div>${btn('导入作文数据','import')}${btn('新增作文','addEssay','soft')}</div>${list.length?`<div class="essayGrid">${list.map(e=>`<button class="essayCard" data-essay="${esc(e.id)}"><div><span class="tag">${esc(e.kind)}</span><span class="tag grey">${esc(e.topic)}</span><h3>${esc(e.year)} · ${esc(e.title)}</h3></div><div class="foot"><span>${countWords(e.original)} 词原稿</span><span>查看并背诵 →</span></div></button>`).join('')}</div>`:empty('暂无作文','请先导入作文数据，或者新建一篇。')}`}
 function renderEssayDetail(){const e=data.essays.find(x=>x.id===ui.essay);if(!e){ui.essay=null;return renderEssays()}const source=e[ui.variant]||'';const arr=paras(source);const labels={original:'手写原稿',revised:'AI修改稿',final:'背诵版'};let comparison=ui.comparison?`<div class="compare"><div class="readingBox"><div class="eyebrow">ORIGINAL / 原稿</div><div class="article">${esc(e.original)}</div></div><div class="readingBox"><div class="eyebrow">REVISED / 修改稿</div><div class="article">${esc(e.revised)}</div></div></div>`:'';let article=arr.map((p,i)=>`<div class="readingBlock"><div class="paraHeader"><span class="paraLabel">PARAGRAPH ${String(i+1).padStart(2,'0')}</span>${btn(ui.shown[i]?'隐藏':'显示','togglePara:'+i,'ghost')}</div>${ui.readMode==='cn'?`<div class="cnHint">第 ${i+1} 段 · 根据这一段的观点自行回忆英文，点击下面区域查看原文。</div>`:''}${ui.readMode==='en'||ui.shown[i]?`<p class="article paragraph">${esc(p)}</p>`:`<div class="hiddenText" data-action="togglePara:${i}">英文已隐藏 · 点击展开核对</div>`}</div>`).join('');return `<button class="btn ghost" data-action="backEssays">← 返回作文库</button><div class="eyebrow" style="margin-top:20px">${esc(e.year)} / ${esc(e.kind)}</div><h1 class="pageTitle">${esc(e.title)}</h1><p class="sub">${esc(e.note||'')} · ${countWords(source)} 词</p><div class="toolbar"><div class="seg">${[['original','原稿'],['revised','AI修改'],['final','背诵版']].map(([k,v])=>`<button class="${ui.variant===k?'on':''}" data-variant="${k}">${v}</button>`).join('')}</div>${btn(ui.comparison?'退出对照':'左右对照','compare')}${btn('编辑当前版本','editEssay')}${btn('添加到句子库','extractSentences','soft')}</div>${ui.comparison?comparison:`<div class="toolbar"><div class="seg">${[['en','全文显示'],['cn','隐藏英文']].map(([k,v])=>`<button class="${ui.readMode===k?'on':''}" data-readmode="${k}">${v}</button>`).join('')}</div>${btn('全部显示','showAll')}${btn('全部隐藏','hideAll')}${source.trim() ? btn('记录整篇背诵', 'recordEssay', 'soft') : ''}</div><div class="readingBox">${article}</div>`}`}
@@ -433,10 +440,11 @@ function getDailyStudy() {
 }
 
 function renderDailyStudy(compact = false) {
-  if (!data.phrases.some(isSentenceMaterial)) return '';
+  const hasSentences = data.phrases.some(isSentenceMaterial);
+  if (compact && !hasSentences) return '';
   const {due, fresh} = getDailyStudy();
   const size = due.length ? Math.min(REVIEW_ROUND_SIZE, due.length) : Math.min(NEW_ROUND_SIZE, fresh.length);
-  const message = due.length > size
+  const message = !hasSentences ? '添加好句后就可以开始复习。' : due.length > size
     ? `${due.length} 句到时间了，这轮先复习 ${size} 句。`
     : due.length ? `${size} 句到时间了，按熟练度安排。`
     : size ? '暂时没有到期句子，可以先学一小组新句。' : '暂时没有到期的句子。';
@@ -444,10 +452,7 @@ function renderDailyStudy(compact = false) {
   if (compact) return size ? btn(label, 'dailyStudy', 'soft') : '';
   return `<section class="recall-today" aria-labelledby="daily-study-heading">
     <div><h2 class="sectionTitle" id="daily-study-heading">今日复习</h2><p class="secondary">${message}</p></div>
-    <div class="actions recall-today-actions">
-      ${size ? btn(label, 'dailyStudy', 'primary') : ''}
-      <button type="button" class="btn ghost" data-page="history">背诵记录 →</button>
-    </div>
+    ${size ? btn(label, 'dailyStudy', 'primary') : ''}
   </section>`;
 }
 
@@ -493,7 +498,7 @@ function getSentenceBank() {
 function renderSentenceBank() {
   const {kinds, kind, formats, format, sections, section, groups, cards} = getSentenceBank();
   const heading = `<div class="recall-page-heading"><h1 class="pageTitle">分类背诵</h1>${format ? renderDailyStudy(true) : ''}</div>`;
-  if (!format) return heading + empty('还没有可背的好句', '可以从自己的作文中提取，或导入已有素材。');
+  if (!format) return `<div class="recall-bank">${heading}${empty('还没有可背的好句', '可以从自己的作文中提取，或导入已有素材。')}</div>`;
 
   const selected = activeStudyCards(ui.studySelection);
   const reviewingSelection = ui.showStudySelection;
@@ -504,15 +509,15 @@ function renderSentenceBank() {
     ${selected.length && reviewingSelection ? btn('清空已选', 'recallClearSelection', 'ghost') : ''}
     <button type="button" class="btn primary" data-action="recallStudySelection" ${!selected.length ? 'disabled' : ''}>背诵已选</button>
   </div>`;
-  if (reviewingSelection) return `${heading}${selectionBar}
+  if (reviewingSelection) return `<div class="recall-bank">${heading}${selectionBar}
     <h2 class="sectionTitle recall-selected-heading">已选句子</h2>
     ${selected.length ? `<div class="phraseList">${selected.map(phraseHTML).join('')}</div>`
-      : '<p class="sub">还没有选中的句子。</p>'}`;
+      : '<p class="sub">还没有选中的句子。</p>'}</div>`;
 
   const priority = cards.filter(phrase => phrase.study?.core === true).length;
   const filterButton = (item, action, active) => `<button type="button" class="btn recall-filter"
     data-action="${action}:${item.id}" aria-pressed="${active}">${item.label}</button>`;
-  return `${heading}
+  return `<div class="recall-bank">${heading}
     <div class="recall-controls">
       <div class="recall-category">
         ${kinds.length > 1 ? `<div class="actions recall-filters" role="group" aria-label="大作文或小作文">
@@ -524,10 +529,10 @@ function renderSentenceBank() {
             ${formats.map(item => `<option value="${esc(item.id)}" ${item.id === format.id ? 'selected' : ''}>${esc(item.label)}</option>`).join('')}
           </select>
         </label>
+        ${sections.length ? `<div class="actions recall-filters recall-sections" role="group" aria-label="段落位置">
+          ${sections.map(item => filterButton(item, 'recallSection', item.id === section.id)).join('')}
+        </div>` : ''}
       </div>
-      ${sections.length ? `<div class="actions recall-filters" role="group" aria-label="段落位置">
-        ${sections.map(item => filterButton(item, 'recallSection', item.id === section.id)).join('')}
-      </div>` : ''}
       <div class="actions recall-start">
         ${priority && priority < cards.length ? btn(`先背 ${priority} 句重点`, 'recallPriority', 'primary') : ''}
         ${btn(`背当前 ${cards.length} 句`, 'recallAll', priority && priority < cards.length ? '' : 'primary')}
@@ -535,12 +540,12 @@ function renderSentenceBank() {
       </div>
     </div>
     ${selectionBar}
-    ${[...groups].map(([use, phrases]) => `<section class="expression-group recall-group">
+    ${[...groups].map(([use, phrases]) => `<section class="recall-group">
       <div class="recall-group-heading"><h2 class="sectionTitle">${esc(use)}</h2>
         ${phrases.length > 1 && phrases.length < cards.length ? btn('背这一组', 'recallUse:' + use) : ''}
       </div>
       <div class="phraseList">${phrases.map(phraseHTML).join('')}</div>
-    </section>`).join('')}`;
+    </section>`).join('')}</div>`;
 }
 
 function startCategoryStudy(cards, bank, label = '') {
@@ -700,7 +705,7 @@ function phraseHTML(phrase) {
   const practice = ui.page === 'sentences' && isSentenceMaterial(phrase);
   const last = practice && data.reviews[phrase.id]?.last;
   const actions = `<div class="actions phrase-actions">
-    ${practice ? btn('背这句','recallOne:' + phrase.id) : '<button type="button" class="btn" data-copy-phrase>复制</button>'}
+    ${practice ? btn('背这句','recallOne:' + phrase.id,'ghost') : '<button type="button" class="btn" data-copy-phrase>复制</button>'}
     ${phrase.id ? `<button type="button" class="fav ${isFavorite ? 'on' : ''}" data-fav="${esc(phrase.id)}"
       aria-label="收藏" aria-pressed="${isFavorite}" title="收藏">${isFavorite ? '★' : '☆'}</button>` : ''}
   </div>`;
@@ -822,9 +827,9 @@ function markStudyLevel(phrase, id) {
 
 function renderStudySummary(cards) {
   const remaining = cards.filter(phrase => ui.studyResults.get(phrase.id) !== 'known').length;
-  return `<h1 class="pageTitle" id="study-summary" tabindex="-1">本轮完成</h1>
+  return `<div class="recall-session recall-summary"><h1 class="pageTitle" id="study-summary" tabindex="-1">本轮完成</h1>
     <p class="sub">${esc(ui.studyTitle)} · 已练 ${cards.length} 句</p>
-    <div class="panel recall-panel">
+    <div class="recall-panel">
       <dl class="challenge-counts">
         ${STUDY_LEVELS.map(level => `<div><dt>${level.label}</dt><dd>${cards.filter(phrase => ui.studyResults.get(phrase.id) === level.id).length}</dd></div>`).join('')}
       </dl>
@@ -833,7 +838,7 @@ function renderStudySummary(cards) {
         ${btn(ui.studyReturn === 'home' ? '返回首页' : `返回${NAMES[ui.studyReturn]}`, 'endStudy')}
         ${btn('查看背诵记录', 'historyToday', 'ghost')}
       </div>
-    </div>`;
+    </div></div>`;
 }
 
 function renderStudy() {
@@ -846,12 +851,12 @@ function renderStudy() {
   const last = STUDY_LEVELS.find(level => level.id === data.reviews[phrase.id]?.last);
   return `<div class="recall-session">${exit}
     <h1 class="pageTitle" tabindex="-1">${esc(ui.studyTitle)}</h1>
-    <div class="panel recall-panel">
+    <div class="recall-panel">
       <div class="panelTitle"><span class="secondary">${esc(phrase.origin)}</span><span class="counter">${ui.studyIndex + 1} / ${cards.length}</span></div>
       <progress class="recall-progress" aria-label="本轮标记进度" value="${ui.studyResults.size}" max="${cards.length}"></progress>
       <div class="studyCard">
-        <div class="muted">${esc(phrase.study?.use || '中译英')}</div>
-        <div class="question" tabindex="-1">${esc(phrase.zh || '这句暂时没有中文提示。')}</div>
+        <p class="study-instruction">${esc(phrase.study?.use || '中译英')}</p>
+        <p class="question" tabindex="-1">${esc(phrase.zh || '这句暂时没有中文提示。')}</p>
         ${ui.reveal ? `<div class="answer" lang="en" tabindex="-1">${esc(phrase.en)}</div>${phrase.study?.note ? `<p class="recall-note">${esc(phrase.study.note)}</p>` : ''}` : btn('查看英文答案','reveal','primary')}
       </div>
       ${ui.reveal ? `<div class="actions recall-grade" role="group" aria-label="标记当前句的熟练度">
