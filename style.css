@@ -52,14 +52,26 @@
 .recall-plan { color: #52665a; font-size: 13px; line-height: 1.7; margin: 12px 0 0; }
 .recall-start { margin-top: 13px; }
 .recall-start .counter { flex: 1 0 auto; color: #59685f; margin: 0; }
+.recall-selection { margin: 0 0 18px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--pane); }
+.recall-selection .counter { flex: 1 0 72px; color: #52665a; font-variant-numeric: tabular-nums; }
+.recall-selection .btn { min-height: 44px; }
+.recall-selection .btn:disabled { opacity: .55; cursor: default; }
+.recall-selected-heading { margin: 0 0 8px; }
 .recall-group-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .recall-group-heading h2 { margin: 0; }
 .recall-priority { display: block; width: fit-content; color: var(--accent); font-size: 11px; font-weight: 700; margin-bottom: 5px; }
 .recall-note { color: #52665a; font-size: 13px; line-height: 1.7; }
+.recall-phrase { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+.recall-card-controls { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 5px 10px; padding-top: 5px; border-top: 1px solid var(--line); }
+.recall-check, .recall-level { display: inline-flex; align-items: center; gap: 7px; min-height: 44px; font-size: 13px; color: #52665a; }
+.recall-check { cursor: pointer; }
+.recall-check input { margin: 0; width: 1.15rem; height: 1.15rem; accent-color: var(--accent); }
+.recall-level .select { min-height: 44px; padding: 8px; }
 .recall-panel { max-width: 800px; margin: auto; }
 .recall-panel textarea { font-size: 16px; }
 .recall-panel .btn, .recall-start .btn { min-height: 44px; }
 .recall-grade, .recall-last { text-align: center; justify-content: center; }
+.recall-grade .btn[aria-pressed="true"] { background: var(--accent2); color: var(--accent); border-color: #a9bdad; }
 .recall-navigation { justify-content: space-between; margin-top: 15px; }
 
 @media (max-width: 680px) {
