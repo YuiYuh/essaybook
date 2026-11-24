@@ -44,6 +44,9 @@
   border-radius: var(--radius);
   background: var(--pane);
 }
+.recall-today { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px 16px; margin: 0 0 18px; padding: 14px 16px; border: 1px solid #d0dfd3; border-radius: var(--radius); background: var(--accent2); }
+.recall-today .secondary { margin: 6px 0 0; color: #52665a; }
+.recall-today .btn { min-height: 44px; }
 .recall-filters { gap: 7px; }
 .recall-filters + .recall-filters { margin-top: 9px; }
 .recall-filter { min-height: 42px; padding: 8px 11px; }

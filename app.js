@@ -9,7 +9,7 @@ let data=loadData(), config=loadConfig(), db=null, user=null, synced=false, loca
 let cloudError = '';
 let initialCloudPending = Boolean(config.url && config.key);
 const PHRASE_PAGE_SIZE = 40;
-let ui={page:'home',challenge:null,essay:null,variant:'final',readMode:'cn',shown:{},phraseQuery:'',phraseFilter:'expressions',phraseLimit:PHRASE_PAGE_SIZE,essayFilter:'all',onlyFavorites:false,sentenceKind:'essay',sentenceFormat:'picture',sentenceSection:'opening',studySelection:new Set(),showStudySelection:false,studyList:[],studyIndex:0,studyTitle:'好句背诵',studyReturn:'phrases',reveal:false,typed:'',comparison:false};
+let ui={page:'home',challenge:null,essay:null,variant:'final',readMode:'cn',shown:{},phraseQuery:'',phraseFilter:'expressions',phraseLimit:PHRASE_PAGE_SIZE,essayFilter:'all',onlyFavorites:false,sentenceKind:'essay',sentenceFormat:'picture',sentenceSection:'opening',studySelection:new Set(),showStudySelection:false,studyList:[],studyResults:new Map(),studyIndex:0,studyTitle:'好句背诵',studyReturn:'phrases',reveal:false,typed:'',comparison:false};
 function loadData(){try{return {...blank(),...JSON.parse(localStorage.getItem(KEY))}}catch{return blank()}}
 function loadConfig(){let stored={};try{stored=JSON.parse(localStorage.getItem(CONFIG))||{}}catch{}const preset=window.ESSAYBOOK_CLOUD||{};const ready=preset.key && !preset.key.startsWith('REPLACE_WITH_');return ready?{url:preset.url,key:preset.key}:stored}
 function recoveryKeys() {
@@ -117,7 +117,7 @@ function draw() {
 }
 function layoutHeader(eyebrow,title,subtitle){return `<div class="eyebrow">${eyebrow}</div><h1 class="pageTitle">${title}</h1><p class="sub">${subtitle}</p>`}
 function essayRow(e){return `<button class="essayItem" data-essay="${esc(e.id)}"><div class="fileIcon">▤</div><div class="details"><b>${esc(e.year)} · ${esc(e.title)}</b><small>${esc(e.kind)}　/　${esc(e.topic)}</small></div><span class="arrow">→</span></button>`}
-function renderHome(){if(ui.essay)return renderEssayDetail();const count=Object.values(data.reviews||{}).length;return `${layoutHeader('YOUR PERSONAL WRITING STUDIO','我的英语作文工作台','写作文时按中文查英文替换表达，也可以打开自己的作文和好句。')}<div class="actions home-expression-link">${btn('按中文查替换表达 →','toPhrases','primary')}</div><div class="heroStats" style="margin-bottom:22px"><div class="stat"><b>${data.essays.length}</b><span>篇作文</span></div><div class="stat"><b>${data.phrases.length}</b><span>条表达</span></div><div class="stat"><b>${count}</b><span>条复习记录</span></div></div><div class="grid2"><div class="panel"><div class="panelTitle"><h2>我的作文</h2><a data-page="essays">全部作文 →</a></div><div class="cardList">${data.essays.length?data.essays.slice().reverse().slice(0,5).map(essayRow).join(''):empty('你的作文库还没导入','导入私人学习数据后，8篇作文和AI修改稿都会出现在这里。')}</div></div><div class="rows"><div class="dailyBox"><div class="eyebrow">STUDY YOUR WAY</div><h3>从一句，练到一篇。</h3><p>整篇遮挡、中英对照、中文提示、好句默写。背哪些，你自己决定。</p><div class="actions">${btn('整篇背诵 →','chooseEssay','primary')}${btn('按题型分类背诵','sentenceMode','soft')}${btn('随机默写','randomChallenge','soft')}</div></div><div class="panel"><div class="panelTitle"><h2>快速开始</h2></div><div class="rows">${[['▤','从作文里提取重点句','essays'],['☆','查看收藏的表达','favorites']].map(([ic,l,p])=>`<button class="essayItem" data-page="${p}"><div class="fileIcon">${ic}</div><div class="details"><b>${l}</b></div><span class="arrow">→</span></button>`).join('')}</div></div></div></div><div class="notice">与官方ChatGPT讨论作文：${btn('打开 ChatGPT ↗','chatgpt','soft')}　讨论完成后可通过“设置 → 导入/导出”更新本站资料。自动双向同步尚未配置。</div>`}
+function renderHome(){if(ui.essay)return renderEssayDetail();const count=Object.values(data.reviews||{}).length;return `${layoutHeader('YOUR PERSONAL WRITING STUDIO','我的英语作文工作台','写作文时按中文查英文替换表达，也可以打开自己的作文和好句。')}<div class="actions home-expression-link">${btn('按中文查替换表达 →','toPhrases','primary')}</div>${renderDailyStudy()}<div class="heroStats" style="margin-bottom:22px"><div class="stat"><b>${data.essays.length}</b><span>篇作文</span></div><div class="stat"><b>${data.phrases.length}</b><span>条表达</span></div><div class="stat"><b>${count}</b><span>条复习记录</span></div></div><div class="grid2"><div class="panel"><div class="panelTitle"><h2>我的作文</h2><a data-page="essays">全部作文 →</a></div><div class="cardList">${data.essays.length?data.essays.slice().reverse().slice(0,5).map(essayRow).join(''):empty('你的作文库还没导入','导入私人学习数据后，8篇作文和AI修改稿都会出现在这里。')}</div></div><div class="rows"><div class="dailyBox"><div class="eyebrow">STUDY YOUR WAY</div><h3>从一句，练到一篇。</h3><p>整篇遮挡、中英对照、中文提示、好句默写。背哪些，你自己决定。</p><div class="actions">${btn('整篇背诵 →','chooseEssay','primary')}${btn('按题型分类背诵','sentenceMode','soft')}${btn('随机默写','randomChallenge','soft')}</div></div><div class="panel"><div class="panelTitle"><h2>快速开始</h2></div><div class="rows">${[['▤','从作文里提取重点句','essays'],['☆','查看收藏的表达','favorites']].map(([ic,l,p])=>`<button class="essayItem" data-page="${p}"><div class="fileIcon">${ic}</div><div class="details"><b>${l}</b></div><span class="arrow">→</span></button>`).join('')}</div></div></div></div><div class="notice">与官方ChatGPT讨论作文：${btn('打开 ChatGPT ↗','chatgpt','soft')}　讨论完成后可通过“设置 → 导入/导出”更新本站资料。自动双向同步尚未配置。</div>`}
 function renderEssays(){if(ui.essay)return renderEssayDetail();const list=data.essays.filter(e=>ui.essayFilter==='all'||e.kind===ui.essayFilter);return `${layoutHeader('YOUR WRITING ARCHIVE','我的作文档案','保留原始手写稿、AI历史修改稿和推荐背诵版。版本不会互相覆盖。')}<div class="toolbar"><div class="seg">${[['all','全部'],['大作文','大作文'],['小作文','小作文']].map(([k,v])=>`<button class="${ui.essayFilter===k?'on':''}" data-essayfilter="${k}">${v}</button>`).join('')}</div>${btn('导入作文数据','import')}${btn('新增作文','addEssay','soft')}</div>${list.length?`<div class="essayGrid">${list.map(e=>`<button class="essayCard" data-essay="${esc(e.id)}"><div><span class="tag">${esc(e.kind)}</span><span class="tag grey">${esc(e.topic)}</span><h3>${esc(e.year)} · ${esc(e.title)}</h3></div><div class="foot"><span>${countWords(e.original)} 词原稿</span><span>查看并背诵 →</span></div></button>`).join('')}</div>`:empty('暂无作文','请先导入作文数据，或者新建一篇。')}`}
 function renderEssayDetail(){const e=data.essays.find(x=>x.id===ui.essay);if(!e){ui.essay=null;return renderEssays()}const source=e[ui.variant]||'';const arr=paras(source);const labels={original:'手写原稿',revised:'AI修改稿',final:'背诵版'};let comparison=ui.comparison?`<div class="compare"><div class="readingBox"><div class="eyebrow">ORIGINAL / 原稿</div><div class="article">${esc(e.original)}</div></div><div class="readingBox"><div class="eyebrow">REVISED / 修改稿</div><div class="article">${esc(e.revised)}</div></div></div>`:'';let article=arr.map((p,i)=>`<div class="readingBlock"><div class="paraHeader"><span class="paraLabel">PARAGRAPH ${String(i+1).padStart(2,'0')}</span>${btn(ui.shown[i]?'隐藏':'显示','togglePara:'+i,'ghost')}</div>${ui.readMode==='cn'?`<div class="cnHint">第 ${i+1} 段 · 根据这一段的观点自行回忆英文，点击下面区域查看原文。</div>`:''}${ui.readMode==='en'||ui.shown[i]?`<p class="article paragraph">${esc(p)}</p>`:`<div class="hiddenText" data-action="togglePara:${i}">英文已隐藏 · 点击展开核对</div>`}</div>`).join('');return `<button class="btn ghost" data-action="backEssays">← 返回作文库</button><div class="eyebrow" style="margin-top:20px">${esc(e.year)} / ${esc(e.kind)}</div><h1 class="pageTitle">${esc(e.title)}</h1><p class="sub">${esc(e.note||'')} · ${countWords(source)} 词</p><div class="toolbar"><div class="seg">${[['original','原稿'],['revised','AI修改'],['final','背诵版']].map(([k,v])=>`<button class="${ui.variant===k?'on':''}" data-variant="${k}">${v}</button>`).join('')}</div>${btn(ui.comparison?'退出对照':'左右对照','compare')}${btn('编辑当前版本','editEssay')}${btn('添加到句子库','extractSentences','soft')}</div>${ui.comparison?comparison:`<div class="toolbar"><div class="seg">${[['en','全文显示'],['cn','隐藏英文']].map(([k,v])=>`<button class="${ui.readMode===k?'on':''}" data-readmode="${k}">${v}</button>`).join('')}</div>${btn('全部显示','showAll')}${btn('全部隐藏','hideAll')}</div><div class="readingBox">${article}</div>`}`}
 function normalizeSearch(value) {
@@ -165,11 +165,57 @@ const SENTENCE_SECTIONS = [
   {id:'body', label:'主体段'},
   {id:'closing', label:'结尾'},
 ];
+const STUDY_MINUTE = 60 * 1000;
+const STUDY_DAY = 24 * 60 * STUDY_MINUTE;
 const STUDY_LEVELS = [
-  {id:'again', label:'不熟'},
-  {id:'familiar', label:'有点熟'},
-  {id:'known', label:'熟练'},
+  {id:'again', label:'不熟', interval:30 * STUDY_MINUTE},
+  {id:'familiar', label:'有点熟', interval:STUDY_DAY},
+  {id:'known', label:'熟练', interval:3 * STUDY_DAY},
 ];
+const REVIEW_ROUND_SIZE = 12;
+const NEW_ROUND_SIZE = 6;
+
+function getDailyStudy() {
+  const due = [];
+  const fresh = [];
+  const now = Date.now();
+  for (const phrase of data.phrases.filter(isSentenceMaterial)) {
+    const review = data.reviews[phrase.id];
+    const priority = STUDY_LEVELS.findIndex(level => level.id === review?.last);
+    if (priority < 0) {
+      fresh.push(phrase);
+      continue;
+    }
+    const markedAt = Date.parse(review.at);
+    const dueAt = Number.isFinite(markedAt) ? markedAt + STUDY_LEVELS[priority].interval : 0;
+    if (dueAt <= now) due.push({phrase, priority, dueAt});
+  }
+  due.sort((a, b) => a.priority - b.priority || a.dueAt - b.dueAt);
+  fresh.sort((a, b) => Number(b.study?.core === true) - Number(a.study?.core === true));
+  return {due:due.map(item => item.phrase), fresh};
+}
+
+function renderDailyStudy() {
+  if (!data.phrases.some(isSentenceMaterial)) return '';
+  const {due, fresh} = getDailyStudy();
+  const size = due.length ? Math.min(REVIEW_ROUND_SIZE, due.length) : Math.min(NEW_ROUND_SIZE, fresh.length);
+  const message = due.length > size
+    ? `${due.length} 句到时间了，这轮先复习 ${size} 句。`
+    : due.length ? `${size} 句到时间了，按熟练度安排。`
+    : size ? '暂时没有到期句子，可以先学一小组新句。' : '暂时没有到期的句子。';
+  const label = due.length ? `复习 ${size} 句` : `先学 ${size} 句`;
+  return `<section class="recall-today" aria-labelledby="daily-study-heading">
+    <div><h2 class="sectionTitle" id="daily-study-heading">今日复习</h2><p class="secondary">${message}</p></div>
+    ${size ? btn(label, 'dailyStudy', 'primary') : ''}
+  </section>`;
+}
+
+function startDailyStudy() {
+  const {due, fresh} = getDailyStudy();
+  const cards = due.length ? due.slice(0, REVIEW_ROUND_SIZE) : fresh.slice(0, NEW_ROUND_SIZE);
+  if (!cards.length) return draw();
+  startStudy(cards.map(phrase => phrase.id), {title:due.length ? '今日复习' : '新句练习', returnPage:ui.page});
+}
 
 function getSentenceBank() {
   const buckets = new Map(SENTENCE_FORMATS.map(format => [format.id, []]));
@@ -226,6 +272,7 @@ function renderSentenceBank() {
   const filterButton = (item, action, active) => `<button type="button" class="btn recall-filter"
     data-action="${action}:${item.id}" aria-pressed="${active}">${item.label}<span>${item.count}</span></button>`;
   return `${heading}
+    ${renderDailyStudy()}
     <div class="recall-controls">
       ${kinds.length > 1 ? `<div class="actions recall-filters" role="group" aria-label="大作文或小作文">
         ${kinds.map(item => filterButton(item, 'recallKind', item.id === kind.id)).join('')}
@@ -519,10 +566,26 @@ function markStudyLevel(phrase, id) {
   return true;
 }
 
+function renderStudySummary(cards) {
+  const remaining = cards.filter(phrase => ui.studyResults.get(phrase.id) !== 'known').length;
+  return `<h1 class="pageTitle" id="study-summary" tabindex="-1">本轮完成</h1>
+    <p class="sub">${esc(ui.studyTitle)} · 已练 ${cards.length} 句</p>
+    <div class="panel recall-panel">
+      <dl class="challenge-counts">
+        ${STUDY_LEVELS.map(level => `<div><dt>${level.label}</dt><dd>${cards.filter(phrase => ui.studyResults.get(phrase.id) === level.id).length}</dd></div>`).join('')}
+      </dl>
+      <div class="actions">
+        ${remaining ? btn(`重练未熟的 ${remaining} 句`, 'retryStudy', 'primary') : ''}
+        ${btn(ui.studyReturn === 'home' ? '返回首页' : `返回${NAMES[ui.studyReturn]}`, 'endStudy')}
+      </div>
+    </div>`;
+}
+
 function renderStudy() {
   const cards = activeStudyCards();
   const exit = btn('← 退出背诵', 'endStudy', 'ghost');
   if (!cards.length) return exit + '<p class="sub">这组暂时没有可背的句子。</p>';
+  if (cards.every(phrase => ui.studyResults.has(phrase.id))) return renderStudySummary(cards);
   ui.studyIndex = Math.min(ui.studyIndex, cards.length - 1);
   const phrase = cards[ui.studyIndex];
   const last = STUDY_LEVELS.find(level => level.id === data.reviews[phrase.id]?.last);
@@ -551,6 +614,7 @@ function attach(){document.querySelectorAll('[data-page]').forEach(e=>e.onclick=
 function startStudy(ids, {title='好句背诵', returnPage='phrases'} = {}) {
   if (!ids.length) return toast('请先选择至少一句');
   ui.studyList = ids;
+  ui.studyResults.clear();
   ui.studyIndex = 0;
   ui.studyTitle = title;
   ui.studyReturn = returnPage;
@@ -567,6 +631,27 @@ function moveStudy(step) {
   ui.reveal = false;
   ui.typed = '';
   draw();
+}
+
+function gradeStudy(level) {
+  const cards = activeStudyCards();
+  const phrase = cards[ui.studyIndex];
+  if (!markStudyLevel(phrase, level)) return;
+  ui.studyResults.set(phrase.id, level);
+
+  const ungraded = item => !ui.studyResults.has(item.id);
+  const later = cards.findIndex((item, index) => index > ui.studyIndex && ungraded(item));
+  const next = later === -1 ? cards.findIndex(ungraded) : later;
+  if (next !== -1) ui.studyIndex = next;
+  ui.reveal = false;
+  ui.typed = '';
+  draw();
+  if (next === -1) $('#study-summary')?.focus({preventScroll:true});
+}
+
+function retryStudy() {
+  const pending = activeStudyCards().filter(phrase => ui.studyResults.has(phrase.id) && ui.studyResults.get(phrase.id) !== 'known');
+  startStudy(pending.map(phrase => phrase.id), {title:'重练未熟句', returnPage:ui.studyReturn});
 }
 
 function clearStudySelection() {
@@ -618,13 +703,15 @@ function handleRecallAction(action) {
   }
   if (command === 'recallAll') startCategoryStudy(bank.cards, bank);
 }
-function act(action){if(action.startsWith('recall'))return handleRecallAction(action);if(action.startsWith('togglePara:')){let i=+action.split(':')[1];ui.shown[i]=!ui.shown[i];draw();return}if(action.startsWith('mark:')){const phrase=activeStudyCards()[ui.studyIndex];if(markStudyLevel(phrase,action.slice(5)))moveStudy(1);return}switch(action){
+function act(action){if(action.startsWith('recall'))return handleRecallAction(action);if(action.startsWith('togglePara:')){let i=+action.split(':')[1];ui.shown[i]=!ui.shown[i];draw();return}if(action.startsWith('mark:'))return gradeStudy(action.slice(5));switch(action){
  case 'randomChallenge': startChallenge(); break;
  case 'endChallenge': ui.essay=null; showPage('home'); break;
  case 'revealChallenge': if(!ui.challenge)break; ui.challenge.revealed=true; draw(); $('#challenge-answer')?.focus({preventScroll:true}); break;
  case 'gradeChallenge:known': gradeChallenge('known'); break;
  case 'gradeChallenge:again': gradeChallenge('again'); break;
  case 'retryChallenge': retryChallenge(); break;
+ case 'dailyStudy': startDailyStudy(); break;
+ case 'retryStudy': retryStudy(); break;
  case 'sentenceMode': showPage('sentences'); break;
  case 'studyFavorites': startStudy(data.phrases.filter(p => isSentenceMaterial(p) && data.favorites.includes(p.id)).map(p => p.id)); break;
  case 'import':$('#importFile').click();break;case 'export':downloadJSON(data,'essaybook-backup-'+new Date().toISOString().slice(0,10)+'.json');break;case 'chooseEssay':ui.essay=null;showPage('essays');break;case 'chatgpt':window.open('https://chatgpt.com','_blank','noopener');break;case 'backEssays':ui.essay=null;showPage('essays');break;case 'toPhrases':showPage('phrases');break;case 'compare':ui.comparison=!ui.comparison;draw();break;case 'showAll':paras(data.essays.find(x=>x.id===ui.essay)?.[ui.variant]).forEach((_,i)=>ui.shown[i]=true);draw();break;case 'hideAll':ui.shown={};ui.readMode='cn';draw();break;case 'reveal':ui.reveal=true;draw();break;case 'prev':moveStudy(-1);break;case 'next':moveStudy(1);break;case 'endStudy':showPage(ui.studyReturn);break;case 'addEssay':editEssay(null);break;case 'editEssay':editEssay(data.essays.find(e=>e.id===ui.essay));break;case 'extractSentences':extractSentences();break;case 'connectCloud':initCloud();break;case 'sendMagic':sendMagic();break;case 'signOut':signOut();break;case 'uploadCloud':cloudSave(true);break;case 'downloadCloud':cloudLoad(true);break}}
