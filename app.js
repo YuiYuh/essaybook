@@ -1,7 +1,8 @@
 /* EssayBook: public application shell. Private writing data is never bundled here. */
 const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const NAMES={home:'首页',history:'背诵记录',challenge:'随机默写',essays:'我的作文',sentences:'分类背诵',study:'好句背诵',phrases:'替换表达',favorites:'我的收藏',settings:'设置'};
-const NAV=['home','essays','sentences','phrases','favorites'];
+const NAMES={home:'首页',history:'背诵记录',challenge:'随机默写',essays:'我的作文',sentences:'分类背诵',patterns:'万能句型',study:'好句背诵',phrases:'替换表达',favorites:'我的收藏',settings:'设置'};
+const NAV=['home','essays','sentences','patterns','phrases','favorites'];
+const PATTERN_CATEGORY = '通用句型';
 const KEY='essaybook-local-v1',CONFIG='essaybook-cloud-config-v1';
 const LOCAL_OWNER = 'essaybook-local-owner';
 const RECOVERY_PREFIX = 'essaybook-recovery-';
@@ -12,7 +13,7 @@ let contentDirty = false;
 let cloudError = '';
 let initialCloudPending = Boolean(config.url && config.key);
 const PHRASE_PAGE_SIZE = 40;
-let ui={page:'home',challenge:null,essay:null,variant:'final',readMode:'cn',shown:{},phraseQuery:'',phraseFilter:'expressions',phraseLimit:PHRASE_PAGE_SIZE,essayFilter:'all',onlyFavorites:false,sentenceKind:'essay',sentenceFormat:'picture',sentenceSection:'opening',studySelection:new Set(),showStudySelection:false,studyList:[],studyResults:new Map(),studyIndex:0,studyTitle:'好句背诵',studyReturn:'phrases',reveal:false,typed:'',comparison:false,changesOnly:false};
+let ui={page:new URLSearchParams(location.search).get('page') === 'patterns' ? 'patterns' : 'home',patternQuery:'',patternFormat:'',patternSection:'',challenge:null,essay:null,variant:'final',readMode:'cn',shown:{},phraseQuery:'',phraseFilter:'expressions',phraseLimit:PHRASE_PAGE_SIZE,essayFilter:'all',onlyFavorites:false,sentenceKind:'essay',sentenceFormat:'picture',sentenceSection:'opening',studySelection:new Set(),showStudySelection:false,studyList:[],studyResults:new Map(),studyIndex:0,studyTitle:'好句背诵',studyReturn:'phrases',reveal:false,typed:'',comparison:false,changesOnly:false};
 function loadData(){try{return {...blank(),...JSON.parse(localStorage.getItem(KEY))}}catch{return blank()}}
 function loadConfig(){let stored={};try{stored=JSON.parse(localStorage.getItem(CONFIG))||{}}catch{}const preset=window.ESSAYBOOK_CLOUD||{};const ready=preset.key && !preset.key.startsWith('REPLACE_WITH_');return ready?{url:preset.url,key:preset.key}:stored}
 function recoveryKeys() {
@@ -128,8 +129,8 @@ function navBar() {
   const current = ui.page === 'study' ? ui.studyReturn : ui.page === 'challenge' ? 'home' : ui.page;
   const link = (id, active) => `<button type="button" class="navItem${active === id ? ' active' : ''}"
     data-page="${id}" ${active === id ? 'aria-current="page"' : ''}>${NAMES[id]}</button>`;
-  $('#nav').innerHTML = [...NAV.slice(0, 3), 'history'].map(item => link(item, current)).join('');
-  $('#toolnav').innerHTML = NAV.slice(3).map(item => link(item, current)).join('');
+  $('#nav').innerHTML = [...NAV.slice(0, 4), 'history'].map(item => link(item, current)).join('');
+  $('#toolnav').innerHTML = NAV.slice(4).map(item => link(item, current)).join('');
   $('.mobileBottom').innerHTML = NAV.map(item => link(item, current === 'history' ? 'home' : current)).join('');
   $('#breadcrumbs').textContent = NAMES[ui.page];
   $('#statPill').textContent = `${data.essays.length} 篇作文 · ${data.phrases.length} 条素材`;
@@ -138,11 +139,13 @@ function navBar() {
 function draw() {
   navBar();
   if (ui.page !== 'phrases' || !$('#phraseSearch')) {
-    const render = {home:renderHome,history:renderHistory,challenge:renderChallenge,essays:renderEssays,sentences:renderSentenceBank,study:renderStudy,phrases:renderPhrases,favorites:renderFavorites,settings:renderSettings};
+    const render = {home:renderHome,history:renderHistory,challenge:renderChallenge,essays:renderEssays,sentences:renderSentenceBank,patterns:renderPatterns,study:renderStudy,phrases:renderPhrases,favorites:renderFavorites,settings:renderSettings};
     $('#app').innerHTML = render[ui.page]();
     if (ui.page === 'phrases') attachPhraseSearch();
+    if (ui.page === 'patterns') attachPatternFilters();
   }
   if (ui.page === 'phrases') updatePhraseResults();
+  if (ui.page === 'patterns') updatePatterns();
   attach();
 }
 function layoutHeader(title, subtitle) {
@@ -236,7 +239,12 @@ const writingConcepts = (typeof WRITING_EXPRESSIONS === 'undefined' ? [] : WRITI
 const builtinPhrases = writingConcepts.flatMap(concept => concept.groups.flatMap(group => group.phrases));
 
 function isSentenceMaterial(phrase) {
-  return phrase?.id && typeof phrase.en === 'string' && phrase.en.trim() && /句/.test(phrase.category || '');
+  return Boolean(phrase?.id && typeof phrase.en === 'string' && phrase.en.trim() &&
+    (isWritingPattern(phrase) || /句/.test(phrase.category || '')));
+}
+
+function isWritingPattern(phrase) {
+  return phrase?.category === PATTERN_CATEGORY;
 }
 
 const SENTENCE_KINDS = [
@@ -602,6 +610,194 @@ function startCategoryStudy(cards, bank, label = '') {
   startStudy(cards.map(phrase => phrase.id), {title, returnPage:'sentences'});
 }
 
+// Use reviewed examples only when the source sentence matches the corresponding construction.
+const PATTERN_FRAMES = [
+  [/^as (?:is|can be) seen (?:from|in) the chart[,，]\s*\S/i, 'As can be seen from the chart, [观察到的变化].',
+    'As can be seen from the chart, more students cycled to campus in 2025 than in 2020.', '引出图表中的变化', 'chart', 'opening'],
+  [/^i am writing to invite you to\s+\S/i, 'I am writing to invite you to [活动或动作].',
+    'I am writing to invite you to join our campus book swap.', '说明来信目的并发出邀请', 'invitation', 'opening'],
+  [/^one (?:possible|major|important) reason (?:for .+? )?is that\s+\S/i, 'One possible reason is that [原因从句].',
+    'One possible reason is that online courses allow students to study at their own pace.', '解释原因', '', 'body'],
+  [/^another (?:possible|major|important) reason (?:for .+? )?is that\s+\S/i, 'Another possible reason is that [原因从句].',
+    'Another possible reason is that public transport has become more reliable.', '补充一个原因', '', 'body'],
+  [/^i would appreciate it if you could\s+\S/i, 'I would appreciate it if you could [动词原形短语].',
+    'I would appreciate it if you could confirm your attendance by Friday.', '礼貌地请求对方采取行动'],
+  [/^i look forward to\s+\S/i, 'I look forward to [名词或动名词短语].',
+    'I look forward to discussing the proposal with you.', '在书信中表达期待', '', 'closing'],
+];
+
+function patternText(...values) {
+  return values.find(value => typeof value === 'string' && value.trim())?.trim() || '';
+}
+
+function patternDetails(phrase) {
+  const study = phrase.study || {};
+  const [, inferredFrame, generated, scenario, format, section] =
+    PATTERN_FRAMES.find(([match]) => match.test(phrase.en.trim())) || [];
+  const original = patternText(phrase.original, study.original);
+  const example = patternText(phrase.transferExample, study.transferExample, phrase.example);
+  const template = patternText(phrase.frame, phrase.template, study.frame, study.template);
+  const hasSlots = /\[[^\]]+\]|\{[^}]+\}|…|\.{3}|_{2,}/.test(phrase.en);
+  return {
+    phrase,
+    frame: template || (hasSlots ? phrase.en : inferredFrame) || '',
+    original: original || (!hasSlots ? phrase.en : ''),
+    example: example || generated || '',
+    generatedExample: !example && Boolean(generated),
+    use: patternText(study.use, phrase.use, scenario),
+    source: patternText(phrase.origin, phrase.source),
+    format: patternClassification(SENTENCE_FORMATS, study.format, phrase.format, phrase.topic, format),
+    section: patternClassification(SENTENCE_SECTIONS, study.section, phrase.section, phrase.topic, section),
+  };
+}
+
+function patternClassification(items, studyValue, value, topic, inferred) {
+  const candidate = patternText(studyValue, value);
+  const match = items.find(item => candidate ? [item.id, item.label].includes(candidate) : item.label === topic);
+  return match?.id || candidate || inferred || '';
+}
+
+function patternLabel(items, value, missing) {
+  return items.find(item => item.id === value)?.label || value || missing;
+}
+
+function patternOptions(items, values, selected, all, missing) {
+  return `<option value="">${all}</option>${[...new Set(values)].map(value => {
+    const key = value || 'unclassified';
+    return `<option value="${esc(key)}" ${key === selected ? 'selected' : ''}>${esc(patternLabel(items, value, missing))}</option>`;
+  }).join('')}`;
+}
+
+function getPatterns() {
+  return data.phrases.filter(phrase => isWritingPattern(phrase) && isSentenceMaterial(phrase)).map(patternDetails);
+}
+
+function visiblePatterns(patterns) {
+  const terms = normalizeSearch(ui.patternQuery).split(' ').filter(Boolean);
+  return patterns.filter(card => {
+    const {phrase, frame, original, example, use, source, format, section} = card;
+    if (ui.patternFormat && (format || 'unclassified') !== ui.patternFormat) return false;
+    if (ui.patternSection && (section || 'unclassified') !== ui.patternSection) return false;
+    const text = [phrase.en, phrase.zh, phrase.topic, frame, original, example, use, source,
+      patternLabel(SENTENCE_FORMATS, format, '题型待标注'), patternLabel(SENTENCE_SECTIONS, section, '段落待标注')]
+      .map(normalizeSearch).join(' ');
+    return terms.every(term => text.includes(term));
+  });
+}
+
+function isPriorityPattern({phrase}, hasMarkedPriority) {
+  return hasMarkedPriority ? phrase.study?.core === true
+    : phrase.study?.core !== false && data.reviews[phrase.id]?.last !== 'known';
+}
+
+function renderPatternCard(card) {
+  const {phrase, frame, original, example, generatedExample, use, source, format, section} = card;
+  const favorite = data.favorites.includes(phrase.id);
+  const level = STUDY_LEVEL_LABELS.get(data.reviews[phrase.id]?.last) || '未标记';
+  const field = (label, value, english = false, note = '') => `<div><dt>${label}</dt><dd>
+    <span${value && english ? ' lang="en"' : ''}>${esc(value || '暂无')}</span>
+    ${note ? `<small>${note}</small>` : ''}</dd></div>`;
+  return `<article class="phrase pattern-card">
+    <div class="phrase-content">
+      <div class="pattern-tags">
+        <span class="tag">${esc(patternLabel(SENTENCE_FORMATS, format, '题型待标注'))}</span>
+        <span class="tag">${esc(patternLabel(SENTENCE_SECTIONS, section, '段落待标注'))}</span>
+        ${phrase.study?.core === true ? '<span class="tag orange">重点</span>' : ''}
+      </div>
+      <dl class="pattern-details">
+        ${field('句型骨架', frame, true)}
+        ${field('中文含义', phrase.zh)}
+        ${field('原句', original, true)}
+        ${field('迁移例句', example, true, generatedExample ? '本站补充示例' : '')}
+        ${field('使用场景', use)}
+        ${field('来源', source)}
+      </dl>
+    </div>
+    <div class="actions phrase-actions">
+      <span class="counter">熟练度 · ${level}</span>
+      <button type="button" class="btn ghost" data-pattern-one="${esc(phrase.id)}">背这一句</button>
+      <button type="button" class="fav ${favorite ? 'on' : ''}" data-fav="${esc(phrase.id)}"
+        aria-label="收藏" aria-pressed="${favorite}">${favorite ? '★' : '☆'}</button>
+    </div>
+  </article>`;
+}
+
+function renderPatterns() {
+  return `<div class="recall-bank patterns-page">
+    ${layoutHeader('万能句型', '先记句型骨架，再把例句里的场景换成自己的题目。')}
+    <div class="toolbar pattern-filters">
+      <input id="patternSearch" class="search" type="search" aria-label="搜索万能句型" placeholder="搜索中文或英文" value="${esc(ui.patternQuery)}">
+      <select id="patternFormat" class="select" aria-label="写作题型"></select>
+      <select id="patternSection" class="select" aria-label="段落位置"></select>
+    </div>
+    <div class="actions pattern-actions">
+      <button type="button" class="btn primary" data-action="patternAll">背当前分类</button>
+      <button type="button" class="btn" data-action="patternPriority">只背重点</button>
+      <span id="patternCount" class="counter" role="status"></span>
+    </div>
+    <p id="patternPriorityHint" class="secondary"></p>
+    <div id="patternResults"></div>
+  </div>`;
+}
+
+function updatePatterns() {
+  const patterns = getPatterns();
+  const formats = patterns.map(card => card.format);
+  const sections = patterns.map(card => card.section);
+  const formatPicker = $('#patternFormat');
+  const sectionPicker = $('#patternSection');
+  if (ui.patternFormat && !formats.some(value => (value || 'unclassified') === ui.patternFormat)) ui.patternFormat = '';
+  if (ui.patternSection && !sections.some(value => (value || 'unclassified') === ui.patternSection)) ui.patternSection = '';
+  formatPicker.innerHTML = patternOptions(SENTENCE_FORMATS, formats, ui.patternFormat, '全部题型', '题型待标注');
+  sectionPicker.innerHTML = patternOptions(SENTENCE_SECTIONS, sections, ui.patternSection, '全部段落', '段落待标注');
+  const visible = visiblePatterns(patterns);
+  const marked = patterns.some(({phrase}) => phrase.study?.core === true);
+  $('[data-action="patternAll"]').disabled = !visible.length;
+  $('[data-action="patternPriority"]').disabled = !visible.some(card => isPriorityPattern(card, marked));
+  $('#patternCount').textContent = `${visible.length} / ${patterns.length} 句`;
+  $('#patternPriorityHint').textContent = patterns.length && !marked ? '没有标注重点时，优先背尚未标为熟练的句子。' : '';
+  $('#patternResults').innerHTML = !patterns.length
+    ? empty('暂无万能句型', '登录同步或导入包含「通用句型」的学习资料后，即可在这里查看。')
+    : visible.length ? `<div class="phraseList pattern-list">${visible.map(renderPatternCard).join('')}</div>`
+      : '<div class="empty"><strong>暂无匹配的句型</strong><p>试试更短的关键词，或切换题型和段落。</p></div>';
+}
+
+function attachPatternFilters() {
+  const search = $('#patternSearch');
+  onSearchInput(search, () => {
+    if (ui.patternQuery === search.value) return;
+    ui.patternQuery = search.value;
+    updatePatterns();
+  });
+  for (const key of ['patternFormat', 'patternSection']) {
+    const picker = $('#' + key);
+    picker.onchange = () => {
+      ui[key] = picker.value;
+      updatePatterns();
+    };
+  }
+  $('#patternResults').onclick = event => {
+    const button = event.target.closest('[data-pattern-one]');
+    if (button) startPatternStudy('patternOne', button.dataset.patternOne);
+  };
+}
+
+function startPatternStudy(action, id) {
+  const patterns = getPatterns();
+  let cards = visiblePatterns(patterns);
+  const priority = action === 'patternPriority';
+  if (priority) {
+    const marked = patterns.some(({phrase}) => phrase.study?.core === true);
+    cards = cards.filter(card => isPriorityPattern(card, marked));
+  } else if (action === 'patternOne') {
+    cards = cards.filter(({phrase}) => phrase.id === id);
+  }
+  const title = ['万能句型', ui.patternFormat && patternLabel(SENTENCE_FORMATS, ui.patternFormat, ''),
+    ui.patternSection && patternLabel(SENTENCE_SECTIONS, ui.patternSection, ''), priority && '重点']
+    .filter(Boolean).map(part => part === 'unclassified' ? '待标注' : part).join(' · ');
+  startStudy(cards.map(({phrase}) => phrase.id), {title, returnPage:'patterns'});
+}
+
 function getPhraseResults({phraseQuery = ui.phraseQuery, phraseFilter = ui.phraseFilter, onlyFavorites = ui.onlyFavorites} = {}) {
   const query = normalizeSearch(phraseQuery);
   const favoriteIds = new Set(data.favorites);
@@ -900,6 +1096,7 @@ function renderStudy() {
   ui.studyIndex = Math.min(ui.studyIndex, cards.length - 1);
   const phrase = cards[ui.studyIndex];
   const last = STUDY_LEVELS.find(level => level.id === data.reviews[phrase.id]?.last);
+  const frame = ui.studyReturn === 'patterns' ? patternDetails(phrase).frame : '';
   return `<div class="recall-session">${exit}
     <h1 class="pageTitle" tabindex="-1">${esc(ui.studyTitle)}</h1>
     <div class="recall-panel">
@@ -908,7 +1105,7 @@ function renderStudy() {
       <div class="studyCard">
         <p class="study-instruction">${esc(phrase.study?.use || '中译英')}</p>
         <p class="question" tabindex="-1">${esc(phrase.zh || '这句暂时没有中文提示。')}</p>
-        ${ui.reveal ? `<div class="answer" lang="en" tabindex="-1">${esc(phrase.en)}</div>${phrase.study?.note ? `<p class="recall-note">${esc(phrase.study.note)}</p>` : ''}` : btn('查看英文答案','reveal','primary')}
+        ${ui.reveal ? `<div class="answer" lang="en" tabindex="-1">${esc(phrase.en)}</div>${frame && frame !== phrase.en ? `<p class="recall-note" lang="en">${esc(frame)}</p>` : ''}${phrase.study?.note ? `<p class="recall-note">${esc(phrase.study.note)}</p>` : ''}` : btn('查看英文答案','reveal','primary')}
       </div>
       ${ui.reveal ? `<div class="actions recall-grade" role="group" aria-label="标记当前句的熟练度">
         ${STUDY_LEVELS.map(level => `<button type="button" class="btn" data-action="mark:${level.id}"
@@ -962,7 +1159,7 @@ function attach() {
   };
 }
 
-const STUDY_RETURN_PAGES = ['home', 'sentences', 'phrases', 'favorites'];
+const STUDY_RETURN_PAGES = ['home', 'sentences', 'patterns', 'phrases', 'favorites'];
 let roundTypingTimer;
 
 function newestCheckpoint(first, second) {
@@ -1192,6 +1389,8 @@ function act(action) {
     return;
   }
   switch (action) {
+    case 'patternAll':
+    case 'patternPriority': return startPatternStudy(action);
     case 'resumeRound': return resumeRound();
     case 'historyToday':
       historyFilter = '0';
